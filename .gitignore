@@ -1,0 +1,10 @@
+.env
+.venv/
+venv/
+.python-version
+__pycache__/
+*.py[cod]
+.pytest_cache/
+reports/*.md
+reports/*.docx
+!reports/.gitkeep

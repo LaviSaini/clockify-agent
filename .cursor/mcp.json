@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "clockify-mcp": {
+      "command": "node",
+      "args": ["${workspaceFolder}/clockify-mcp/build/index.js"],
+      "env": {
+        "CLOCKIFY_API_KEY": "${env:CLOCKIFY_API_KEY}"
+      }
+    }
+  }
+}
