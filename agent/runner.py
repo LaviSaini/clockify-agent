@@ -129,6 +129,16 @@ def _workspace_user_names(payload: dict) -> list[str]:
     return [u.get("name") for u in payload.get("users", [])]
 
 
+def _user_email_by_name(payload: dict) -> dict[str, str]:
+    """Map Clockify display name -> email for reports (last wins if names duplicate)."""
+    out: dict[str, str] = {}
+    for u in payload.get("users", []):
+        name = u.get("name")
+        if name:
+            out[name] = (u.get("email") or "").strip()
+    return out
+
+
 def _slim_entries_for_llm(entries_by_user: dict[str, list]) -> dict[str, list]:
     """Minimal fields for the LLM to cut input tokens (ids/hours are irrelevant for text quality)."""
     out: dict[str, list] = {}
@@ -277,6 +287,7 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "missing_logs": payload["missing_logs"],
             "poor_descriptions": local_poor_descriptions,
             "workspace_users": _workspace_user_names(payload),
+            "user_email_by_name": _user_email_by_name(payload),
         }
 
     # 3) Minimal LLM payload: only borderline entries, compact JSON, no missing_logs/users/projects.
@@ -323,6 +334,7 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "missing_logs": payload["missing_logs"],
             "poor_descriptions": merged_poor,
             "workspace_users": _workspace_user_names(payload),
+            "user_email_by_name": _user_email_by_name(payload),
         }
     except Exception as exc:
         print(f"[runner] OpenAI analysis failed, using local scores only: {exc}")
@@ -330,4 +342,5 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "missing_logs": payload["missing_logs"],
             "poor_descriptions": local_poor_descriptions,
             "workspace_users": _workspace_user_names(payload),
+            "user_email_by_name": _user_email_by_name(payload),
         }

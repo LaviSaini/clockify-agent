@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from collections import defaultdict
 from datetime import datetime
@@ -29,12 +31,20 @@ def _append_filled_row(ws, values: list, fill: PatternFill) -> None:
     ws.append(row)
 
 
+def _email_for_user(data: dict, user: str | None) -> str:
+    if not user:
+        return ""
+    return (data.get("user_email_by_name") or {}).get(user, "") or ""
+
+
 def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
     wb = openpyxl.Workbook(write_only=True)
 
     # ── Sheet 1: Summary ──────────────────────────────────────────────────────
     ws1 = wb.create_sheet("Summary")
-    _append_header_row(ws1, ["User", "Missing Days", "Incomplete Days", "Flagged Entries"])
+    _append_header_row(
+        ws1, ["User", "Email", "Missing Days", "Incomplete Days", "Flagged Entries"]
+    )
 
     missing_count = defaultdict(lambda: {"Missing": 0, "Incomplete": 0})
     for row in data.get("missing_logs", []):
@@ -54,6 +64,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
         ws1.append(
             [
                 user,
+                _email_for_user(data, user),
                 missing_count[user]["Missing"],
                 missing_count[user]["Incomplete"],
                 desc_count[user],
@@ -62,14 +73,18 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
 
     # ── Sheet 2: Missing Logs ─────────────────────────────────────────────────
     ws2 = wb.create_sheet("Missing Logs")
-    _append_header_row(ws2, ["User", "Date", "Day", "Hours Logged", "Severity"])
+    _append_header_row(
+        ws2, ["User", "Email", "Date", "Day", "Hours Logged", "Severity"]
+    )
 
     for row in data.get("missing_logs", []):
         fill = RED if row["severity"] == "Missing" else AMBER
+        u = row.get("user")
         _append_filled_row(
             ws2,
             [
-                row["user"],
+                u,
+                _email_for_user(data, u),
                 row["date"],
                 row["day"],
                 row["hours_logged"],
@@ -80,14 +95,18 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
 
     # ── Sheet 3: Poor Descriptions ────────────────────────────────────────────
     ws3 = wb.create_sheet("Poor Descriptions")
-    _append_header_row(ws3, ["User", "Date", "Project", "Description", "Score", "Reason"])
+    _append_header_row(
+        ws3, ["User", "Email", "Date", "Project", "Description", "Score", "Reason"]
+    )
 
     for row in data.get("poor_descriptions", []):
         fill = RED if row["score"] == 1 else AMBER
+        u = row.get("user")
         _append_filled_row(
             ws3,
             [
-                row["user"],
+                u,
+                _email_for_user(data, u),
                 row["date"],
                 row.get("project", ""),
                 row["description"],
