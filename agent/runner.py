@@ -16,6 +16,23 @@ from tools.analysis_tools import detect_missing_logs
 from tools.clockify_tools import get_all_users, get_projects, get_time_entries
 
 
+def _user_display_label(u: dict) -> str:
+    """
+    Stable user key for reports and dicts. Clockify may leave name null; use email or id so
+    Excel User/Email columns and lookups stay populated.
+    """
+    name = (u.get("name") or "").strip()
+    if name:
+        return name
+    email = (u.get("email") or "").strip()
+    if email:
+        return email
+    uid = u.get("id")
+    if uid is not None and str(uid).strip():
+        return str(uid).strip()
+    return "Unknown"
+
+
 def _openai_model_name() -> str:
     """Model id if LLM pass is enabled; empty string skips OpenAI (local scores only)."""
     skip = os.getenv("LOGLLENS_SKIP_OPENAI", "").strip().lower() in {
@@ -50,7 +67,8 @@ def _fetch_and_detect_for_user(
     end_date: str,
     project_by_id: dict,
 ) -> tuple[int, str, list, list]:
-    uid, name = u.get("id"), u.get("name")
+    uid = u.get("id")
+    label = _user_display_label(u)
     try:
         entries = get_time_entries(uid, start_date, end_date)
         for e in entries:
@@ -58,18 +76,18 @@ def _fetch_and_detect_for_user(
                 e.get("project_id") or "", ""
             ) or ""
     except Exception as e:
-        print(f"Error fetching time entries for user {name}: {e}")
+        print(f"Error fetching time entries for user {label}: {e}")
         traceback.print_exc()
-        return index, name, [], []
+        return index, label, [], []
 
     try:
-        missing = detect_missing_logs(name, entries, start_date, end_date)
+        missing = detect_missing_logs(label, entries, start_date, end_date)
     except Exception as e:
-        print(f"Error detecting missing logs for user {name}: {e}")
+        print(f"Error detecting missing logs for user {label}: {e}")
         traceback.print_exc()
         missing = []
 
-    return index, name, entries, missing
+    return index, label, entries, missing
 
 
 def gather_payload(start_date: str, end_date: str) -> dict:
@@ -108,12 +126,12 @@ def gather_payload(start_date: str, end_date: str) -> dict:
             for i, u in enumerate(users)
         ]
         for fut in as_completed(futures):
-            i, name, entries, missing = fut.result()
-            indexed[i] = (name, entries, missing)
+            i, label, entries, missing = fut.result()
+            indexed[i] = (label, entries, missing)
 
     for i in range(len(users)):
-        name, entries, missing = indexed[i]
-        time_entries_by_user[name] = entries
+        label, entries, missing = indexed[i]
+        time_entries_by_user[label] = entries
         missing_logs.extend(missing)
 
     return {
@@ -125,17 +143,16 @@ def gather_payload(start_date: str, end_date: str) -> dict:
 
 
 def _workspace_user_names(payload: dict) -> list[str]:
-    """Display names in Clockify user-list order (one row per workspace member in reports)."""
-    return [u.get("name") for u in payload.get("users", [])]
+    """Per-user label in Clockify list order (name, else email, else id)."""
+    return [_user_display_label(u) for u in payload.get("users", [])]
 
 
 def _user_email_by_name(payload: dict) -> dict[str, str]:
-    """Map Clockify display name -> email for reports (last wins if names duplicate)."""
+    """Map report user label -> email (label matches missing_logs / poor_descriptions user field)."""
     out: dict[str, str] = {}
     for u in payload.get("users", []):
-        name = u.get("name")
-        if name:
-            out[name] = (u.get("email") or "").strip()
+        label = _user_display_label(u)
+        out[label] = (u.get("email") or "").strip()
     return out
 
 
