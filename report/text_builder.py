@@ -11,6 +11,22 @@ def _fmt_pct(numerator: int, denominator: int) -> str:
     return f"{(numerator / denominator) * 100:.1f}%"
 
 
+def _group_id(row: dict) -> str:
+    return ((row.get("user_id") or row.get("user") or "") or "").strip() or "__unknown__"
+
+
+def _markdown_label(uid: str, data: dict) -> str:
+    name = ((data.get("user_name_by_id") or {}).get(uid, "") or "").strip()
+    if name:
+        return name
+    email = ((data.get("user_email_by_id") or {}).get(uid, "") or "").strip()
+    if email:
+        return email
+    if uid and uid != "__unknown__":
+        return uid
+    return "Unknown"
+
+
 def build_markdown_report(data: dict, start_date: str, end_date: str) -> str:
     missing_logs = data.get("missing_logs", [])
     poor_descriptions = data.get("poor_descriptions", [])
@@ -26,21 +42,21 @@ def build_markdown_report(data: dict, start_date: str, end_date: str) -> str:
     )
 
     for row in missing_logs:
-        user = row.get("user", "Unknown")
+        uid = _group_id(row)
         sev = row.get("severity", "")
         if sev == "Missing":
-            by_user[user]["missing_days"] += 1
+            by_user[uid]["missing_days"] += 1
         elif sev == "Incomplete":
-            by_user[user]["incomplete_days"] += 1
+            by_user[uid]["incomplete_days"] += 1
 
     for row in poor_descriptions:
-        user = row.get("user", "Unknown")
-        by_user[user]["poor_descriptions"] += 1
+        uid = _group_id(row)
+        by_user[uid]["poor_descriptions"] += 1
         score = int(row.get("score", 0) or 0)
         if score == 1:
-            by_user[user]["score1"] += 1
+            by_user[uid]["score1"] += 1
         elif score == 2:
-            by_user[user]["score2"] += 1
+            by_user[uid]["score2"] += 1
 
     total_missing_days = sum(v["missing_days"] for v in by_user.values())
     total_incomplete_days = sum(v["incomplete_days"] for v in by_user.values())
@@ -80,10 +96,11 @@ def build_markdown_report(data: dict, start_date: str, end_date: str) -> str:
     if not ranked_users:
         lines.append("- No issues found in the selected date range.")
     else:
-        for user, stats in ranked_users:
+        for uid, stats in ranked_users:
+            label = _markdown_label(uid, data)
             lines.append(
                 "- "
-                f"**{user}**: {stats['missing_days']} missing, "
+                f"**{label}**: {stats['missing_days']} missing, "
                 f"{stats['incomplete_days']} incomplete, "
                 f"{stats['poor_descriptions']} poor descriptions "
                 f"(score1={stats['score1']}, score2={stats['score2']})"

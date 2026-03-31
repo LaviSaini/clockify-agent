@@ -4,7 +4,13 @@ from datetime import datetime, timedelta
 MIN_HOURS = float(os.getenv("MIN_HOURS_PER_DAY", 8))
 
 
-def detect_missing_logs(user_name: str, entries: list, start_date: str, end_date: str) -> list:
+def detect_missing_logs(
+    user_name: str,
+    user_id: str,
+    entries: list,
+    start_date: str,
+    end_date: str,
+) -> list:
     """
     Given a list of time entries for a user, detects missing or incomplete days.
     Skips weekends. Returns a list of flagged days with severity:
@@ -38,6 +44,7 @@ def detect_missing_logs(user_name: str, entries: list, start_date: str, end_date
             if severity:
                 flagged.append({
                     "user": user_name,
+                    "user_id": user_id,
                     "date": date_str,
                     "day": day_name,
                     "hours_logged": round(hours, 2),

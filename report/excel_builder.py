@@ -31,10 +31,16 @@ def _append_filled_row(ws, values: list, fill: PatternFill) -> None:
     ws.append(row)
 
 
-def _email_for_user(data: dict, user: str | None) -> str:
-    if not user:
-        return ""
-    return (data.get("user_email_by_name") or {}).get(user, "") or ""
+def _name_for_id(data: dict, uid: str) -> str:
+    return ((data.get("user_name_by_id") or {}).get(uid, "") or "").strip()
+
+
+def _email_for_id(data: dict, uid: str) -> str:
+    return ((data.get("user_email_by_id") or {}).get(uid, "") or "").strip()
+
+
+def _row_uid(row: dict) -> str:
+    return ((row.get("user_id") or row.get("user") or "") or "").strip()
 
 
 def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
@@ -48,26 +54,29 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
 
     missing_count = defaultdict(lambda: {"Missing": 0, "Incomplete": 0})
     for row in data.get("missing_logs", []):
-        missing_count[row["user"]][row["severity"]] += 1
+        rid = _row_uid(row)
+        if rid:
+            missing_count[rid][row["severity"]] += 1
 
     desc_count = defaultdict(int)
     for row in data.get("poor_descriptions", []):
-        desc_count[row["user"]] += 1
+        rid = _row_uid(row)
+        if rid:
+            desc_count[rid] += 1
 
-    # One Summary row per workspace member (same order as Clockify user list). Users with no issues show zeros.
-    users_for_summary = data.get("workspace_users")
+    users_for_summary = data.get("workspace_user_ids")
     if not users_for_summary:
-        issue_users = set(missing_count.keys()) | set(desc_count.keys())
-        users_for_summary = sorted(issue_users, key=lambda x: x or "")
+        issue_ids = set(missing_count.keys()) | set(desc_count.keys())
+        users_for_summary = sorted(issue_ids, key=lambda x: x or "")
 
-    for user in users_for_summary:
+    for uid in users_for_summary:
         ws1.append(
             [
-                user,
-                _email_for_user(data, user),
-                missing_count[user]["Missing"],
-                missing_count[user]["Incomplete"],
-                desc_count[user],
+                _name_for_id(data, uid),
+                _email_for_id(data, uid),
+                missing_count[uid]["Missing"],
+                missing_count[uid]["Incomplete"],
+                desc_count[uid],
             ]
         )
 
@@ -79,12 +88,14 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
 
     for row in data.get("missing_logs", []):
         fill = RED if row["severity"] == "Missing" else AMBER
-        u = row.get("user")
+        uid = (row.get("user_id") or "").strip()
+        name_cell = _name_for_id(data, uid) if uid else (row.get("user") or "").strip()
+        email_cell = _email_for_id(data, uid) if uid else ""
         _append_filled_row(
             ws2,
             [
-                u,
-                _email_for_user(data, u),
+                name_cell,
+                email_cell,
                 row["date"],
                 row["day"],
                 row["hours_logged"],
@@ -101,12 +112,14 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
 
     for row in data.get("poor_descriptions", []):
         fill = RED if row["score"] == 1 else AMBER
-        u = row.get("user")
+        uid = (row.get("user_id") or "").strip()
+        name_cell = _name_for_id(data, uid) if uid else (row.get("user") or "").strip()
+        email_cell = _email_for_id(data, uid) if uid else ""
         _append_filled_row(
             ws3,
             [
-                u,
-                _email_for_user(data, u),
+                name_cell,
+                email_cell,
                 row["date"],
                 row.get("project", ""),
                 row["description"],

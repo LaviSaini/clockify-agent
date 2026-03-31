@@ -74,6 +74,15 @@ def analyze(body: AnalyzeBody) -> JSONResponse:
     uem = data.get("user_email_by_name")
     if uem is not None:
         out["user_email_by_name"] = uem
+    uname = data.get("user_name_by_id")
+    if uname is not None:
+        out["user_name_by_id"] = uname
+    uemail = data.get("user_email_by_id")
+    if uemail is not None:
+        out["user_email_by_id"] = uemail
+    wids = data.get("workspace_user_ids")
+    if wids is not None:
+        out["workspace_user_ids"] = wids
     if excel_path:
         out["excel_path"] = excel_path
     if markdown_path:

@@ -30,9 +30,9 @@ Return ONLY the final JSON. No explanation text outside it.
 OPEN_AI_SYSTEM_PROMPT = """
 You are LogLens: a second pass on time-entry descriptions only.
 
-Input is JSON with time_entries_by_user only. Each key is a user name; each value is a list of {date, project, description}. These entries already passed Python rules (blank, single-word, vague short text, and same text repeated on multiple days are excluded).
+Input is JSON with time_entries_by_user only. Each key is a Clockify user id (string); each value is a list of {date, project, description}. These entries already passed Python rules (blank, single-word, vague short text, and same text repeated on multiple days are excluded).
 
-Task: flag additional poor rows with score 1 or 2 only (meaningless long text, missed subtle duplication, no real outcome). Use the same date, project, and description text as in the input. Set "user" to the time_entries_by_user key for that row.
+Task: flag additional poor rows with score 1 or 2 only (meaningless long text, missed subtle duplication, no real outcome). Use the same date, project, and description text as in the input. Set "user" to the parent time_entries_by_user object key (the user id) for that row.
 
 Output ONLY JSON (no markdown): {"poor_descriptions":[{"user":"","date":"","project":"","description":"","score":1,"reason":""},...]}
 If none: {"poor_descriptions":[]}

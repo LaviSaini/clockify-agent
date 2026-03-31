@@ -16,21 +16,26 @@ from tools.analysis_tools import detect_missing_logs
 from tools.clockify_tools import get_all_users, get_projects, get_time_entries
 
 
-def _user_display_label(u: dict) -> str:
-    """
-    Stable user key for reports and dicts. Clockify may leave name null; use email or id so
-    Excel User/Email columns and lookups stay populated.
-    """
-    name = (u.get("name") or "").strip()
-    if name:
-        return name
-    email = (u.get("email") or "").strip()
-    if email:
-        return email
+def _user_id_str(u: dict) -> str | None:
     uid = u.get("id")
-    if uid is not None and str(uid).strip():
-        return str(uid).strip()
-    return "Unknown"
+    if uid is None:
+        return None
+    s = str(uid).strip()
+    return s or None
+
+
+def _roster_maps(users: list) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    name_by_id: dict[str, str] = {}
+    email_by_id: dict[str, str] = {}
+    ordered_ids: list[str] = []
+    for u in users:
+        uid = _user_id_str(u)
+        if not uid:
+            continue
+        ordered_ids.append(uid)
+        name_by_id[uid] = (u.get("name") or "").strip()
+        email_by_id[uid] = (u.get("email") or "").strip()
+    return name_by_id, email_by_id, ordered_ids
 
 
 def _openai_model_name() -> str:
@@ -66,28 +71,32 @@ def _fetch_and_detect_for_user(
     start_date: str,
     end_date: str,
     project_by_id: dict,
-) -> tuple[int, str, list, list]:
-    uid = u.get("id")
-    label = _user_display_label(u)
+) -> tuple[int, str | None, list, list]:
+    uid_str = _user_id_str(u)
+    raw_name = (u.get("name") or "").strip()
+    if not uid_str:
+        print("Skipping Clockify user with no id:", u.get("email"), u.get("name"))
+        return index, None, [], []
+
     try:
-        entries = get_time_entries(uid, start_date, end_date)
+        entries = get_time_entries(u.get("id"), start_date, end_date)
         for e in entries:
             e["project"] = project_by_id.get(
                 e.get("project_id") or "", ""
             ) or ""
     except Exception as e:
-        print(f"Error fetching time entries for user {label}: {e}")
+        print(f"Error fetching time entries for user {uid_str}: {e}")
         traceback.print_exc()
-        return index, label, [], []
+        return index, uid_str, [], []
 
     try:
-        missing = detect_missing_logs(label, entries, start_date, end_date)
+        missing = detect_missing_logs(raw_name, uid_str, entries, start_date, end_date)
     except Exception as e:
-        print(f"Error detecting missing logs for user {label}: {e}")
+        print(f"Error detecting missing logs for user {uid_str}: {e}")
         traceback.print_exc()
         missing = []
 
-    return index, label, entries, missing
+    return index, uid_str, entries, missing
 
 
 def gather_payload(start_date: str, end_date: str) -> dict:
@@ -107,12 +116,13 @@ def gather_payload(start_date: str, end_date: str) -> dict:
 
     time_entries_by_user: dict[str, list] = {}
     missing_logs: list = []
+    name_by_id, email_by_id, workspace_user_ids = _roster_maps(users)
 
     # Default 1: Clockify rate-limits hard; raise CLOCKIFY_FETCH_CONCURRENCY only if your plan allows.
     conc = int(os.getenv("CLOCKIFY_FETCH_CONCURRENCY", "1"))
     conc = max(1, min(conc, 16))
     max_workers = min(conc, max(1, len(users)))
-    indexed: dict[int, tuple[str, list, list]] = {}
+    indexed: dict[int, tuple[str | None, list, list]] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(
@@ -126,12 +136,14 @@ def gather_payload(start_date: str, end_date: str) -> dict:
             for i, u in enumerate(users)
         ]
         for fut in as_completed(futures):
-            i, label, entries, missing = fut.result()
-            indexed[i] = (label, entries, missing)
+            i, uid_str, entries, missing = fut.result()
+            indexed[i] = (uid_str, entries, missing)
 
     for i in range(len(users)):
-        label, entries, missing = indexed[i]
-        time_entries_by_user[label] = entries
+        uid_str, entries, missing = indexed[i]
+        if not uid_str:
+            continue
+        time_entries_by_user[uid_str] = entries
         missing_logs.extend(missing)
 
     return {
@@ -139,21 +151,20 @@ def gather_payload(start_date: str, end_date: str) -> dict:
         "projects": projects,
         "time_entries_by_user": time_entries_by_user,
         "missing_logs": missing_logs,
+        "user_name_by_id": name_by_id,
+        "user_email_by_id": email_by_id,
+        "workspace_user_ids": workspace_user_ids,
     }
 
 
 def _workspace_user_names(payload: dict) -> list[str]:
-    """Per-user label in Clockify list order (name, else email, else id)."""
-    return [_user_display_label(u) for u in payload.get("users", [])]
+    """Stable user ids in Clockify member order (for summary / API)."""
+    return list(payload.get("workspace_user_ids") or [])
 
 
 def _user_email_by_name(payload: dict) -> dict[str, str]:
-    """Map report user label -> email (label matches missing_logs / poor_descriptions user field)."""
-    out: dict[str, str] = {}
-    for u in payload.get("users", []):
-        label = _user_display_label(u)
-        out[label] = (u.get("email") or "").strip()
-    return out
+    """Maps user id -> email (kept for response key name compatibility)."""
+    return dict(payload.get("user_email_by_id") or {})
 
 
 def _slim_entries_for_llm(entries_by_user: dict[str, list]) -> dict[str, list]:
@@ -214,7 +225,10 @@ def _score_entries_locally(payload: dict) -> tuple[list[dict], dict[str, list]]:
     poor_descriptions: list[dict] = []
     time_entries_to_llm_by_user: dict[str, list] = {}
 
-    for user, entries in payload.get("time_entries_by_user", {}).items():
+    name_by_id = payload.get("user_name_by_id") or {}
+
+    for user_id, entries in payload.get("time_entries_by_user", {}).items():
+        raw_name = (name_by_id.get(user_id) or "").strip()
         # Detect copy-pasted descriptions for that user across multiple days.
         by_desc: dict[str, set[str]] = {}
         for entry in entries:
@@ -236,7 +250,8 @@ def _score_entries_locally(payload: dict) -> tuple[list[dict], dict[str, list]]:
             if score <= 2:
                 poor_descriptions.append(
                     {
-                        "user": user,
+                        "user_id": user_id,
+                        "user": raw_name,
                         "date": entry.get("date", ""),
                         "project": entry.get("project", ""),
                         "description": desc,
@@ -245,7 +260,7 @@ def _score_entries_locally(payload: dict) -> tuple[list[dict], dict[str, list]]:
                     }
                 )
             else:
-                time_entries_to_llm_by_user.setdefault(user, []).append(entry)
+                time_entries_to_llm_by_user.setdefault(user_id, []).append(entry)
 
     return poor_descriptions, time_entries_to_llm_by_user
 
@@ -258,8 +273,11 @@ def _merge_poor_descriptions(
     keep the LLM version (it should be at least as informative).
     """
     def _key(d: dict) -> tuple:
+        uid = (d.get("user_id") or "").strip()
+        if not uid:
+            uid = (d.get("user") or "").strip()
         return (
-            (d.get("user") or ""),
+            uid,
             (d.get("date") or ""),
             (d.get("project") or ""),
             (d.get("description") or ""),
@@ -286,6 +304,22 @@ def _merge_poor_descriptions(
     return merged
 
 
+def _normalize_poor_description_rows(rows: list[dict], name_by_id: dict[str, str]) -> None:
+    """Ensure user_id + user (raw name) after LLM merge; LLM puts Clockify id in user."""
+    for row in rows:
+        uid = (row.get("user_id") or "").strip()
+        ufield = (row.get("user") or "").strip()
+        if uid:
+            row["user"] = name_by_id.get(uid, row.get("user") or "")
+            continue
+        if ufield in name_by_id:
+            row["user_id"] = ufield
+            row["user"] = name_by_id[ufield]
+        elif ufield:
+            row["user_id"] = ufield
+            row["user"] = name_by_id.get(ufield, "")
+
+
 def run_analysis(start_date: str, end_date: str) -> dict:
     model_name = _openai_model_name()
     payload = gather_payload(start_date, end_date)
@@ -305,6 +339,9 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "poor_descriptions": local_poor_descriptions,
             "workspace_users": _workspace_user_names(payload),
             "user_email_by_name": _user_email_by_name(payload),
+            "user_name_by_id": payload.get("user_name_by_id") or {},
+            "user_email_by_id": payload.get("user_email_by_id") or {},
+            "workspace_user_ids": payload.get("workspace_user_ids") or [],
         }
 
     # 3) Minimal LLM payload: only borderline entries, compact JSON, no missing_logs/users/projects.
@@ -346,12 +383,16 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             llm_poor = []
 
         merged_poor = _merge_poor_descriptions(local_poor_descriptions, llm_poor)
+        _normalize_poor_description_rows(merged_poor, payload.get("user_name_by_id") or {})
 
         return {
             "missing_logs": payload["missing_logs"],
             "poor_descriptions": merged_poor,
             "workspace_users": _workspace_user_names(payload),
             "user_email_by_name": _user_email_by_name(payload),
+            "user_name_by_id": payload.get("user_name_by_id") or {},
+            "user_email_by_id": payload.get("user_email_by_id") or {},
+            "workspace_user_ids": payload.get("workspace_user_ids") or [],
         }
     except Exception as exc:
         print(f"[runner] OpenAI analysis failed, using local scores only: {exc}")
@@ -360,4 +401,7 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "poor_descriptions": local_poor_descriptions,
             "workspace_users": _workspace_user_names(payload),
             "user_email_by_name": _user_email_by_name(payload),
+            "user_name_by_id": payload.get("user_name_by_id") or {},
+            "user_email_by_id": payload.get("user_email_by_id") or {},
+            "workspace_user_ids": payload.get("workspace_user_ids") or [],
         }
