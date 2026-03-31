@@ -12,7 +12,7 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 load_dotenv()
 
@@ -27,10 +27,17 @@ class AnalyzeBody(BaseModel):
     start_date: str = Field(..., description="YYYY-MM-DD")
     end_date: str = Field(..., description="YYYY-MM-DD")
     write_excel: bool = Field(False, description="If true, also write output/loglens_report_*.xlsx")
-    write_markdown: bool = Field(
-        True,
-        description="If true, also write output/loglens_summary_*.md",
+    write_markdown: bool | None = Field(
+        None,
+        description="If true/false, control .md output. If omitted: true when write_excel is false, false when write_excel is true.",
     )
+
+    @model_validator(mode="after")
+    def _infer_write_markdown(self) -> AnalyzeBody:
+        if self.write_markdown is None:
+            # Excel-only requests should not surprise-generate markdown unless both flags are explicit.
+            object.__setattr__(self, "write_markdown", not self.write_excel)
+        return self
 
 
 @app.get("/health")
