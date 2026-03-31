@@ -60,6 +60,10 @@ def analyze(body: AnalyzeBody) -> JSONResponse:
             "poor_descriptions": len(data.get("poor_descriptions", [])),
         },
     }
+    wu = data.get("workspace_users")
+    if wu is not None:
+        out["workspace_users"] = wu
+        out["counts"]["workspace_users"] = len(wu)
     if excel_path:
         out["excel_path"] = excel_path
     if markdown_path:

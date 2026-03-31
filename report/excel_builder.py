@@ -44,8 +44,13 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
     for row in data.get("poor_descriptions", []):
         desc_count[row["user"]] += 1
 
-    all_users = set(list(missing_count.keys()) + list(desc_count.keys()))
-    for user in sorted(all_users, key=lambda x: x or ""):
+    # One Summary row per workspace member (same order as Clockify user list). Users with no issues show zeros.
+    users_for_summary = data.get("workspace_users")
+    if not users_for_summary:
+        issue_users = set(missing_count.keys()) | set(desc_count.keys())
+        users_for_summary = sorted(issue_users, key=lambda x: x or "")
+
+    for user in users_for_summary:
         ws1.append(
             [
                 user,

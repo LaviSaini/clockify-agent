@@ -16,7 +16,16 @@ from tools.analysis_tools import detect_missing_logs
 from tools.clockify_tools import get_all_users, get_projects, get_time_entries
 
 
-def _configure_openai() -> str:
+def _openai_model_name() -> str:
+    """Model id if LLM pass is enabled; empty string skips OpenAI (local scores only)."""
+    skip = os.getenv("LOGLLENS_SKIP_OPENAI", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if skip:
+        return ""
     api_key = os.getenv("OPEN_AI_API_KEY", "").strip()
     if not api_key:
         return ""
@@ -110,6 +119,26 @@ def gather_payload(start_date: str, end_date: str) -> dict:
         "time_entries_by_user": time_entries_by_user,
         "missing_logs": missing_logs,
     }
+
+
+def _workspace_user_names(payload: dict) -> list[str]:
+    """Display names in Clockify user-list order (one row per workspace member in reports)."""
+    return [u.get("name") for u in payload.get("users", [])]
+
+
+def _slim_entries_for_llm(entries_by_user: dict[str, list]) -> dict[str, list]:
+    """Minimal fields for the LLM to cut input tokens (ids/hours are irrelevant for text quality)."""
+    out: dict[str, list] = {}
+    for user, entries in entries_by_user.items():
+        out[user] = [
+            {
+                "date": e.get("date", ""),
+                "project": e.get("project", ""),
+                "description": e.get("description", ""),
+            }
+            for e in entries
+        ]
+    return out
 
 
 def _score_description(description: str) -> tuple[int, str]:
@@ -228,7 +257,7 @@ def _merge_poor_descriptions(
 
 
 def run_analysis(start_date: str, end_date: str) -> dict:
-    model_name = _configure_openai()
+    model_name = _openai_model_name()
     payload = gather_payload(start_date, end_date)
 
     # 1) Local pre-scan first.
@@ -244,15 +273,16 @@ def run_analysis(start_date: str, end_date: str) -> dict:
         return {
             "missing_logs": payload["missing_logs"],
             "poor_descriptions": local_poor_descriptions,
+            "workspace_users": _workspace_user_names(payload),
         }
 
-    # 3) Build a filtered payload for the LLM (so we don't waste tokens).
-    filtered_payload = dict(payload)
-    filtered_payload["time_entries_by_user"] = entries_to_llm_by_user
-
+    # 3) Minimal LLM payload: only borderline entries, compact JSON, no missing_logs/users/projects.
+    llm_body = {
+        "time_entries_by_user": _slim_entries_for_llm(entries_to_llm_by_user),
+    }
     user_message = (
-        f"Date range: {start_date} to {end_date}.\n\n"
-        f"Data (JSON):\n{json.dumps(filtered_payload, ensure_ascii=False, indent=2)}"
+        f"Date range:{start_date} to {end_date}. "
+        f"JSON:{json.dumps(llm_body, ensure_ascii=False, separators=(',', ':'))}"
     )
 
     # model = OpenAI.GenerativeModel(
@@ -268,7 +298,7 @@ def run_analysis(start_date: str, end_date: str) -> dict:
                 {"role": "system", "content": OPEN_AI_SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
             ],
-            temperature=0.2,
+            temperature=0,
         )
         choice = response.choices[0] if response.choices else None
         raw = (choice.message.content if choice and choice.message else "") or ""
@@ -289,10 +319,12 @@ def run_analysis(start_date: str, end_date: str) -> dict:
         return {
             "missing_logs": payload["missing_logs"],
             "poor_descriptions": merged_poor,
+            "workspace_users": _workspace_user_names(payload),
         }
     except Exception as exc:
         print(f"[runner] OpenAI analysis failed, using local scores only: {exc}")
         return {
             "missing_logs": payload["missing_logs"],
             "poor_descriptions": local_poor_descriptions,
+            "workspace_users": _workspace_user_names(payload),
         }
