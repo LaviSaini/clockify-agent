@@ -90,7 +90,10 @@ def gather_payload(start_date: str, end_date: str) -> dict:
     time_entries_by_user: dict[str, list] = {}
     missing_logs: list = []
 
-    max_workers = min(32, max(1, len(users)))
+    # Default 1: Clockify rate-limits hard; raise CLOCKIFY_FETCH_CONCURRENCY only if your plan allows.
+    conc = int(os.getenv("CLOCKIFY_FETCH_CONCURRENCY", "1"))
+    conc = max(1, min(conc, 16))
+    max_workers = min(conc, max(1, len(users)))
     indexed: dict[int, tuple[str, list, list]] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
