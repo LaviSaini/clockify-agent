@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import traceback
+
 
 from openai import OpenAI
 
@@ -31,24 +33,51 @@ def _extract_json_object(text: str) -> dict:
         raise ValueError("OpenAI did not return a JSON object.")
     return json.loads(m.group(0))
 
-
 def gather_payload(start_date: str, end_date: str) -> dict:
-    users = get_all_users()
-    projects = get_projects()
-    project_by_id = {p["id"]: p["name"] for p in projects}
+    try:
+        users = get_all_users()
+    except Exception as e:
+        print("Error fetching users:", e)
+        return {}
+
+    try:
+        projects = get_projects()
+        project_by_id = {p["id"]: p["name"] for p in projects}
+    except Exception as e:
+        print("Error fetching projects:", e)
+        projects = []
+        project_by_id = {}
 
     time_entries_by_user: dict[str, list] = {}
     missing_logs: list = []
 
     for u in users:
-        uid, name = u["id"], u["name"]
-        entries = get_time_entries(uid, start_date, end_date)
-        for e in entries:
-            e["project"] = project_by_id.get(e.get("project_id") or "", "") or ""
-        time_entries_by_user[name] = entries
-        missing_logs.extend(
-            detect_missing_logs(name, entries, start_date, end_date)
-        )
+        uid, name = u.get("id"), u.get("name")
+
+        try:
+            entries = get_time_entries(uid, start_date, end_date)
+
+            # Map project names safely
+            for e in entries:
+                e["project"] = project_by_id.get(
+                    e.get("project_id") or "", ""
+                ) or ""
+
+            time_entries_by_user[name] = entries
+
+        except Exception as e:
+            print(f"Error fetching time entries for user {name}: {e}")
+            traceback.print_exc()
+            time_entries_by_user[name] = []
+            continue
+
+        try:
+            missing_logs.extend(
+                detect_missing_logs(name, entries, start_date, end_date)
+            )
+        except Exception as e:
+            print(f"Error detecting missing logs for user {name}: {e}")
+            traceback.print_exc()
 
     return {
         "users": users,

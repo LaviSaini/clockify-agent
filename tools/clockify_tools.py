@@ -33,22 +33,49 @@ def _workspace_id() -> str:
     _log(f"Workspace auto-detected: {data[0]['id']}")
     return data[0]["id"]
 
+def fetch_all_users(page: int = 1, page_size: int = 50):
+    workspace_id = _workspace_id()
+    url = f"{BASE_URL}/workspaces/{workspace_id}/users"
+
+    response = requests.get(
+        url,
+        headers=_headers(),
+        params={"page": page, "page-size": page_size}
+    )
+    return response
+
 
 def get_all_users() -> list:
     """Returns all members of the workspace."""
-    workspace_id = _workspace_id()
-    url = f"{BASE_URL}/workspaces/{workspace_id}/users"
-    _log(f"GET users for workspace {workspace_id}")
-    response = requests.get(url, headers=_headers())
-    data = response.json()
-    print(len(data))
-    users_list = data if isinstance(data, list) else data.get("users", []) 
-    users = [
-    {"id": u["id"], "name": u["name"], "email": u["email"]}
-    for u in users_list
-    ]
-    print(f"Fetched users: {len(users)}")
-    return users
+    
+    final_users_data = []
+    page = 1
+    page_size = 50
+
+    while True:
+        response = fetch_all_users(page, page_size)
+        data = response.json()
+
+        users_list = data if isinstance(data, list) else data.get("users", [])
+
+        users = [
+            {"id": u["id"], "name": u["name"], "email": u["email"]}
+            for u in users_list
+        ]
+
+        # ✅ Add users to final list
+        final_users_data.extend(users)
+
+        # ✅ Read header correctly
+        last_page = response.headers.get("Last-Page", "false")
+
+        if last_page == "true":
+            break
+
+        page += 1
+
+    print(len(final_users_data),"final users data")
+    return final_users_data
 
 
 def get_time_entries(user_id: str, start_date: str, end_date: str) -> list:
