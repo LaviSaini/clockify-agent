@@ -28,7 +28,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
         desc_count[row["user"]] += 1
 
     all_users = set(list(missing_count.keys()) + list(desc_count.keys()))
-    for user in sorted(all_users):
+    for user in sorted(all_users, key=lambda x: x or ""):        
         ws1.append([
             user,
             missing_count[user]["Missing"],
