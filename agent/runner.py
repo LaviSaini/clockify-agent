@@ -6,7 +6,7 @@ import json
 import os
 import re
 import traceback
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from openai import OpenAI
 
@@ -33,6 +33,36 @@ def _extract_json_object(text: str) -> dict:
         raise ValueError("OpenAI did not return a JSON object.")
     return json.loads(m.group(0))
 
+
+def _fetch_and_detect_for_user(
+    index: int,
+    u: dict,
+    start_date: str,
+    end_date: str,
+    project_by_id: dict,
+) -> tuple[int, str, list, list]:
+    uid, name = u.get("id"), u.get("name")
+    try:
+        entries = get_time_entries(uid, start_date, end_date)
+        for e in entries:
+            e["project"] = project_by_id.get(
+                e.get("project_id") or "", ""
+            ) or ""
+    except Exception as e:
+        print(f"Error fetching time entries for user {name}: {e}")
+        traceback.print_exc()
+        return index, name, [], []
+
+    try:
+        missing = detect_missing_logs(name, entries, start_date, end_date)
+    except Exception as e:
+        print(f"Error detecting missing logs for user {name}: {e}")
+        traceback.print_exc()
+        missing = []
+
+    return index, name, entries, missing
+
+
 def gather_payload(start_date: str, end_date: str) -> dict:
     try:
         users = get_all_users()
@@ -51,33 +81,28 @@ def gather_payload(start_date: str, end_date: str) -> dict:
     time_entries_by_user: dict[str, list] = {}
     missing_logs: list = []
 
-    for u in users:
-        uid, name = u.get("id"), u.get("name")
-
-        try:
-            entries = get_time_entries(uid, start_date, end_date)
-
-            # Map project names safely
-            for e in entries:
-                e["project"] = project_by_id.get(
-                    e.get("project_id") or "", ""
-                ) or ""
-
-            time_entries_by_user[name] = entries
-
-        except Exception as e:
-            print(f"Error fetching time entries for user {name}: {e}")
-            traceback.print_exc()
-            time_entries_by_user[name] = []
-            continue
-
-        try:
-            missing_logs.extend(
-                detect_missing_logs(name, entries, start_date, end_date)
+    max_workers = min(32, max(1, len(users)))
+    indexed: dict[int, tuple[str, list, list]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _fetch_and_detect_for_user,
+                i,
+                u,
+                start_date,
+                end_date,
+                project_by_id,
             )
-        except Exception as e:
-            print(f"Error detecting missing logs for user {name}: {e}")
-            traceback.print_exc()
+            for i, u in enumerate(users)
+        ]
+        for fut in as_completed(futures):
+            i, name, entries, missing = fut.result()
+            indexed[i] = (name, entries, missing)
+
+    for i in range(len(users)):
+        name, entries, missing = indexed[i]
+        time_entries_by_user[name] = entries
+        missing_logs.extend(missing)
 
     return {
         "users": users,
