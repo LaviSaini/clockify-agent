@@ -12,8 +12,40 @@ from openai import OpenAI
 
 
 from agent.prompts import OPEN_AI_SYSTEM_PROMPT
-from tools.analysis_tools import detect_missing_logs
+from tools.analysis_tools import MIN_HOURS, detect_missing_logs
 from tools.clockify_tools import get_all_users, get_projects, get_time_entries
+
+
+def _allowed_activity_terms() -> frozenset[str]:
+    """
+    Whole-word tokens (case-insensitive) that count as acceptable activity labels.
+    Entries containing any of these are not scored 1–2 locally for brevity/vagueness,
+    and are not downgraded for repeating the same text across days.
+    Override with env LOGLLENS_ALLOWED_ACTIVITY_TERMS (comma-separated).
+    """
+    raw = os.getenv(
+        "LOGLLENS_ALLOWED_ACTIVITY_TERMS",
+        "standup,assignment,meeting",
+    )
+    return frozenset(p.strip().lower() for p in raw.split(",") if p.strip())
+
+
+def _words_include_allowed(words: list[str], allowed: frozenset[str]) -> bool:
+    if not allowed or not words:
+        return False
+    for w in words:
+        core = w.strip(".,;:!?\"'()[]`").lower()
+        if core in allowed:
+            return True
+    return False
+
+
+def _description_tokens_include_allowed(description: str, allowed: frozenset[str]) -> bool:
+    text = (description or "").strip()
+    if not text:
+        return False
+    words = [w for w in re.split(r"\s+", text) if w]
+    return _words_include_allowed(words, allowed)
 
 
 def _user_id_str(u: dict) -> str | None:
@@ -171,6 +203,7 @@ def gather_payload(start_date: str, end_date: str) -> dict:
         "user_email_by_id": email_by_id,
         "workspace_user_ids": workspace_user_ids,
         "total_hours_by_user_id": total_hours_by_user_id,
+        "min_hours_per_day": MIN_HOURS,
     }
 
 
@@ -205,6 +238,14 @@ def _score_description(description: str) -> tuple[int, str]:
         return 1, "Blank or empty description."
 
     words = [w for w in re.split(r"\s+", text) if w]
+    allowed = _allowed_activity_terms()
+    if _words_include_allowed(words, allowed):
+        if len(words) == 1:
+            return 3, "Standard activity label (allowlisted term)."
+        if len(words) < 10:
+            return 3, "Activity note includes allowlisted term."
+        return 4, "Reasonably clear description."
+
     lower = text.lower()
     vague_terms = {
         "work",
@@ -244,6 +285,8 @@ def _score_entries_locally(payload: dict) -> tuple[list[dict], dict[str, list]]:
 
     name_by_id = payload.get("user_name_by_id") or {}
 
+    allowed = _allowed_activity_terms()
+
     for user_id, entries in payload.get("time_entries_by_user", {}).items():
         raw_name = (name_by_id.get(user_id) or "").strip()
         # Detect copy-pasted descriptions for that user across multiple days.
@@ -259,8 +302,12 @@ def _score_entries_locally(payload: dict) -> tuple[list[dict], dict[str, list]]:
             score, reason = _score_description(desc)
 
             repeated_note = ""
-            if desc and desc.lower() in repeated:
-                # If repeated across days, downgrade to poor quality.
+            if (
+                desc
+                and desc.lower() in repeated
+                and not _description_tokens_include_allowed(desc, allowed)
+            ):
+                # Same text on multiple days → poor, unless it uses an allowlisted activity term.
                 repeated_note = " Repeated across multiple days."
                 score = min(score, 2)
 
@@ -276,7 +323,8 @@ def _score_entries_locally(payload: dict) -> tuple[list[dict], dict[str, list]]:
                         "reason": f"{reason}{repeated_note}".strip(),
                     }
                 )
-            else:
+            elif not _description_tokens_include_allowed(desc, allowed):
+                # Allowlisted activity terms stay local-only so the LLM does not re-flag them.
                 time_entries_to_llm_by_user.setdefault(user_id, []).append(entry)
 
     return poor_descriptions, time_entries_to_llm_by_user
@@ -360,6 +408,7 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "user_email_by_id": payload.get("user_email_by_id") or {},
             "workspace_user_ids": payload.get("workspace_user_ids") or [],
             "total_hours_by_user_id": payload.get("total_hours_by_user_id") or {},
+            "min_hours_per_day": payload.get("min_hours_per_day", MIN_HOURS),
         }
 
     # 3) Minimal LLM payload: only borderline entries, compact JSON, no missing_logs/users/projects.
@@ -412,6 +461,7 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "user_email_by_id": payload.get("user_email_by_id") or {},
             "workspace_user_ids": payload.get("workspace_user_ids") or [],
             "total_hours_by_user_id": payload.get("total_hours_by_user_id") or {},
+            "min_hours_per_day": payload.get("min_hours_per_day", MIN_HOURS),
         }
     except Exception as exc:
         print(f"[runner] OpenAI analysis failed, using local scores only: {exc}")
@@ -424,4 +474,5 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "user_email_by_id": payload.get("user_email_by_id") or {},
             "workspace_user_ids": payload.get("workspace_user_ids") or [],
             "total_hours_by_user_id": payload.get("total_hours_by_user_id") or {},
+            "min_hours_per_day": payload.get("min_hours_per_day", MIN_HOURS),
         }

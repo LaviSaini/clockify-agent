@@ -86,6 +86,9 @@ def analyze(body: AnalyzeBody) -> JSONResponse:
     th = data.get("total_hours_by_user_id")
     if th is not None:
         out["total_hours_by_user_id"] = th
+    mhpd = data.get("min_hours_per_day")
+    if mhpd is not None:
+        out["min_hours_per_day"] = mhpd
     if excel_path:
         out["excel_path"] = excel_path
     if markdown_path:

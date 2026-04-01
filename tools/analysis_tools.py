@@ -42,12 +42,15 @@ def detect_missing_logs(
                 severity = None
 
             if severity:
+                # Hours still needed to reach MIN_HOURS (0 logged → full day target).
+                hours_deficit = round(max(0.0, MIN_HOURS - float(hours)), 2)
                 flagged.append({
                     "user": user_name,
                     "user_id": user_id,
                     "date": date_str,
                     "day": day_name,
                     "hours_logged": round(hours, 2),
+                    "hours_deficit": hours_deficit,
                     "severity": severity,
                 })
         current += timedelta(days=1)

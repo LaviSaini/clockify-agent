@@ -53,6 +53,21 @@ def _row_uid(row: dict) -> str:
     return ((row.get("user_id") or row.get("user") or "") or "").strip()
 
 
+def _hours_deficit_from_row(data: dict, row: dict) -> float:
+    """Hours short of min_hours_per_day for that weekday (see MIN_HOURS_PER_DAY in analysis)."""
+    if row.get("hours_deficit") is not None:
+        try:
+            return float(row["hours_deficit"])
+        except (TypeError, ValueError):
+            pass
+    try:
+        target = float(data.get("min_hours_per_day") or 8)
+        logged = float(row.get("hours_logged") or 0)
+        return round(max(0.0, target - logged), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
     wb = openpyxl.Workbook(write_only=True)
 
@@ -66,15 +81,18 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
             "Total Hours",
             "Missing Days",
             "Incomplete Days",
+            "Total deficit (hrs)",
             "Flagged Entries",
         ],
     )
 
     missing_count = defaultdict(lambda: {"Missing": 0, "Incomplete": 0})
+    deficit_total_by_uid: defaultdict[str, float] = defaultdict(float)
     for row in data.get("missing_logs", []):
         rid = _row_uid(row)
         if rid:
             missing_count[rid][row["severity"]] += 1
+            deficit_total_by_uid[rid] += _hours_deficit_from_row(data, row)
 
     desc_count = defaultdict(int)
     for row in data.get("poor_descriptions", []):
@@ -95,6 +113,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
                 _total_hours_for_id(data, uid),
                 missing_count[uid]["Missing"],
                 missing_count[uid]["Incomplete"],
+                round(deficit_total_by_uid[uid], 2),
                 desc_count[uid],
             ]
         )
@@ -102,7 +121,8 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
     # ── Sheet 2: Missing Logs ─────────────────────────────────────────────────
     ws2 = wb.create_sheet("Missing Logs")
     _append_header_row(
-        ws2, ["User", "Email", "Date", "Day", "Hours Logged", "Severity"]
+        ws2,
+        ["User", "Email", "Date", "Day", "Hours Logged", "Hours deficit", "Severity"],
     )
 
     for row in data.get("missing_logs", []):
@@ -110,6 +130,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
         uid = (row.get("user_id") or "").strip()
         name_cell = _name_for_id(data, uid) if uid else (row.get("user") or "").strip()
         email_cell = _email_for_id(data, uid) if uid else ""
+        deficit = _hours_deficit_from_row(data, row)
         _append_filled_row(
             ws2,
             [
@@ -118,6 +139,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
                 row["date"],
                 row["day"],
                 row["hours_logged"],
+                deficit,
                 row["severity"],
             ],
             fill,
