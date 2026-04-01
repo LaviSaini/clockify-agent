@@ -24,6 +24,20 @@ def _user_id_str(u: dict) -> str | None:
     return s or None
 
 
+def _total_hours_by_user(time_entries_by_user: dict[str, list]) -> dict[str, float]:
+    """Sum logged hours per user for the fetched date range (from Clockify entries)."""
+    out: dict[str, float] = {}
+    for uid, entries in time_entries_by_user.items():
+        total = 0.0
+        for e in entries:
+            try:
+                total += float(e.get("hours") or 0)
+            except (TypeError, ValueError):
+                pass
+        out[uid] = round(total, 2)
+    return out
+
+
 def _roster_maps(users: list) -> tuple[dict[str, str], dict[str, str], list[str]]:
     name_by_id: dict[str, str] = {}
     email_by_id: dict[str, str] = {}
@@ -146,6 +160,8 @@ def gather_payload(start_date: str, end_date: str) -> dict:
         time_entries_by_user[uid_str] = entries
         missing_logs.extend(missing)
 
+    total_hours_by_user_id = _total_hours_by_user(time_entries_by_user)
+
     return {
         "users": users,
         "projects": projects,
@@ -154,6 +170,7 @@ def gather_payload(start_date: str, end_date: str) -> dict:
         "user_name_by_id": name_by_id,
         "user_email_by_id": email_by_id,
         "workspace_user_ids": workspace_user_ids,
+        "total_hours_by_user_id": total_hours_by_user_id,
     }
 
 
@@ -342,6 +359,7 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "user_name_by_id": payload.get("user_name_by_id") or {},
             "user_email_by_id": payload.get("user_email_by_id") or {},
             "workspace_user_ids": payload.get("workspace_user_ids") or [],
+            "total_hours_by_user_id": payload.get("total_hours_by_user_id") or {},
         }
 
     # 3) Minimal LLM payload: only borderline entries, compact JSON, no missing_logs/users/projects.
@@ -393,6 +411,7 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "user_name_by_id": payload.get("user_name_by_id") or {},
             "user_email_by_id": payload.get("user_email_by_id") or {},
             "workspace_user_ids": payload.get("workspace_user_ids") or [],
+            "total_hours_by_user_id": payload.get("total_hours_by_user_id") or {},
         }
     except Exception as exc:
         print(f"[runner] OpenAI analysis failed, using local scores only: {exc}")
@@ -404,4 +423,5 @@ def run_analysis(start_date: str, end_date: str) -> dict:
             "user_name_by_id": payload.get("user_name_by_id") or {},
             "user_email_by_id": payload.get("user_email_by_id") or {},
             "workspace_user_ids": payload.get("workspace_user_ids") or [],
+            "total_hours_by_user_id": payload.get("total_hours_by_user_id") or {},
         }

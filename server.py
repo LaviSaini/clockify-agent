@@ -83,6 +83,9 @@ def analyze(body: AnalyzeBody) -> JSONResponse:
     wids = data.get("workspace_user_ids")
     if wids is not None:
         out["workspace_user_ids"] = wids
+    th = data.get("total_hours_by_user_id")
+    if th is not None:
+        out["total_hours_by_user_id"] = th
     if excel_path:
         out["excel_path"] = excel_path
     if markdown_path:

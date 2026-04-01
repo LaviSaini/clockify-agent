@@ -39,6 +39,16 @@ def _email_for_id(data: dict, uid: str) -> str:
     return ((data.get("user_email_by_id") or {}).get(uid, "") or "").strip()
 
 
+def _total_hours_for_id(data: dict, uid: str) -> float:
+    raw = (data.get("total_hours_by_user_id") or {}).get(uid)
+    if raw is None:
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _row_uid(row: dict) -> str:
     return ((row.get("user_id") or row.get("user") or "") or "").strip()
 
@@ -49,7 +59,15 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
     # ── Sheet 1: Summary ──────────────────────────────────────────────────────
     ws1 = wb.create_sheet("Summary")
     _append_header_row(
-        ws1, ["User", "Email", "Missing Days", "Incomplete Days", "Flagged Entries"]
+        ws1,
+        [
+            "User",
+            "Email",
+            "Total Hours",
+            "Missing Days",
+            "Incomplete Days",
+            "Flagged Entries",
+        ],
     )
 
     missing_count = defaultdict(lambda: {"Missing": 0, "Incomplete": 0})
@@ -74,6 +92,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
             [
                 _name_for_id(data, uid),
                 _email_for_id(data, uid),
+                _total_hours_for_id(data, uid),
                 missing_count[uid]["Missing"],
                 missing_count[uid]["Incomplete"],
                 desc_count[uid],
