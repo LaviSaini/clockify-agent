@@ -2,6 +2,8 @@
 Simple HTTP API: fetch Clockify data, run OpenAI analysis (prompts in agent/prompts.py), return JSON.
 
 Run: uvicorn server:app --reload --host 127.0.0.1 --port 8000
+
+POST /analyze uses multipart form: optional leave CSV file upload (field name: leave_file).
 """
 
 from __future__ import annotations
@@ -10,9 +12,8 @@ import os
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, model_validator
 
 load_dotenv()
 
@@ -23,28 +24,10 @@ from report.text_builder import build_markdown_report
 app = FastAPI(title="LogLens API", version="0.1.0")
 
 
-class AnalyzeBody(BaseModel):
-    start_date: str = Field(..., description="YYYY-MM-DD")
-    end_date: str = Field(..., description="YYYY-MM-DD")
-    leave_csv_path: str | None = Field(
-        None,
-        description=(
-            "Optional absolute path to approved-leave CSV for this run. "
-            "If omitted, uses env LOGLLENS_LEAVE_CSV_PATH if set."
-        ),
-    )
-    write_excel: bool = Field(False, description="If true, also write output/loglens_report_*.xlsx")
-    write_markdown: bool | None = Field(
-        None,
-        description="If true/false, control .md output. If omitted: true when write_excel is false, false when write_excel is true.",
-    )
-
-    @model_validator(mode="after")
-    def _infer_write_markdown(self) -> AnalyzeBody:
-        if self.write_markdown is None:
-            # Excel-only requests should not surprise-generate markdown unless both flags are explicit.
-            object.__setattr__(self, "write_markdown", not self.write_excel)
-        return self
+def _parse_write_markdown(raw: str | None, write_excel: bool) -> bool:
+    if raw is None or str(raw).strip() == "":
+        return not write_excel
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
 @app.get("/health")
@@ -53,22 +36,45 @@ def health() -> dict[str, str]:
 
 
 @app.post("/analyze")
-def analyze(body: AnalyzeBody) -> JSONResponse:
+async def analyze(
+    start_date: str = Form(..., description="YYYY-MM-DD"),
+    end_date: str = Form(..., description="YYYY-MM-DD"),
+    leave_file: UploadFile | None = File(
+        None,
+        description=(
+            "Optional leave requests CSV (approved rows). "
+            "If omitted, uses LOGLLENS_LEAVE_CSV_PATH from .env if set."
+        ),
+    ),
+    write_excel: bool = Form(False),
+    write_markdown: str | None = Form(
+        None,
+        description='Omit for auto: false when write_excel is true, else true. Or "true"/"false".',
+    ),
+) -> JSONResponse:
+    leave_csv_text: str | None = None
+    if leave_file is not None:
+        raw = await leave_file.read()
+        if raw:
+            leave_csv_text = raw.decode("utf-8-sig", errors="replace")
+
+    write_md = _parse_write_markdown(write_markdown, write_excel)
+
     try:
         data: dict[str, Any] = run_analysis(
-            body.start_date,
-            body.end_date,
-            leave_csv_path=body.leave_csv_path,
+            start_date,
+            end_date,
+            leave_csv_text=leave_csv_text,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     excel_path: str | None = None
     markdown_path: str | None = None
-    if body.write_excel:
-        excel_path = build_excel_report(data, body.start_date, body.end_date)
-    if body.write_markdown:
-        markdown_path = build_markdown_report(data, body.start_date, body.end_date)
+    if write_excel:
+        excel_path = build_excel_report(data, start_date, end_date)
+    if write_md:
+        markdown_path = build_markdown_report(data, start_date, end_date)
 
     out: dict[str, Any] = {
         "missing_logs": data.get("missing_logs", []),

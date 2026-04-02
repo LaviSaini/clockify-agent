@@ -14,7 +14,10 @@ from openai import OpenAI
 from agent.prompts import OPEN_AI_SYSTEM_PROMPT
 from tools.analysis_tools import MIN_HOURS, detect_missing_logs
 from tools.clockify_tools import get_all_users, get_projects, get_time_entries
-from tools.leave_loader import build_leave_frozen_by_user_id
+from tools.leave_loader import (
+    build_leave_frozen_by_user_id,
+    build_leave_frozen_by_user_id_from_content,
+)
 
 
 def _allowed_activity_terms() -> frozenset[str]:
@@ -159,6 +162,7 @@ def gather_payload(
     start_date: str,
     end_date: str,
     leave_csv_path: str | None = None,
+    leave_csv_text: str | None = None,
 ) -> dict:
     try:
         users = get_all_users()
@@ -178,14 +182,19 @@ def gather_payload(
     missing_logs: list = []
     name_by_id, email_by_id, workspace_user_ids = _roster_maps(users)
 
-    leave_csv = (leave_csv_path or "").strip() or os.getenv(
-        "LOGLLENS_LEAVE_CSV_PATH", ""
-    ).strip()
-    leave_by_uid = (
-        build_leave_frozen_by_user_id(leave_csv, name_by_id, start_date, end_date)
-        if leave_csv
-        else {}
-    )
+    leave_by_uid: dict[str, frozenset[str]] = {}
+    if (leave_csv_text or "").strip():
+        leave_by_uid = build_leave_frozen_by_user_id_from_content(
+            leave_csv_text, name_by_id, start_date, end_date
+        )
+    else:
+        leave_csv = (leave_csv_path or "").strip() or os.getenv(
+            "LOGLLENS_LEAVE_CSV_PATH", ""
+        ).strip()
+        if leave_csv:
+            leave_by_uid = build_leave_frozen_by_user_id(
+                leave_csv, name_by_id, start_date, end_date
+            )
 
     # Default 1: Clockify rate-limits hard; raise CLOCKIFY_FETCH_CONCURRENCY only if your plan allows.
     conc = int(os.getenv("CLOCKIFY_FETCH_CONCURRENCY", "1"))
@@ -413,9 +422,15 @@ def run_analysis(
     start_date: str,
     end_date: str,
     leave_csv_path: str | None = None,
+    leave_csv_text: str | None = None,
 ) -> dict:
     model_name = _openai_model_name()
-    payload = gather_payload(start_date, end_date, leave_csv_path=leave_csv_path)
+    payload = gather_payload(
+        start_date,
+        end_date,
+        leave_csv_path=leave_csv_path,
+        leave_csv_text=leave_csv_text,
+    )
 
     # 1) Local pre-scan first.
     #    - local_poor_descriptions: score in {1,2}

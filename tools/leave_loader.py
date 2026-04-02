@@ -6,6 +6,7 @@ via normalized employee display names.
 from __future__ import annotations
 
 import csv
+import io
 import os
 from datetime import datetime, timedelta
 
@@ -32,22 +33,18 @@ def _parse_leave_date(s: str) -> datetime | None:
     return None
 
 
-def _parse_leave_csv_rows(path: str) -> list[dict[str, str]]:
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.reader(f)
-        rows = list(reader)
-
+def _dict_rows_from_csv_grid(grid: list[list[str]]) -> list[dict[str, str]]:
     header_idx = None
-    for i, row in enumerate(rows):
+    for i, row in enumerate(grid):
         if row and len(row) > 1 and row[0].strip() == "Employee Number":
             header_idx = i
             break
     if header_idx is None:
         return []
 
-    headers = [h.strip() for h in rows[header_idx]]
+    headers = [h.strip() for h in grid[header_idx]]
     out: list[dict[str, str]] = []
-    for row in rows[header_idx + 1 :]:
+    for row in grid[header_idx + 1 :]:
         if not row or not any((c or "").strip() for c in row):
             continue
         while len(row) < len(headers):
@@ -56,27 +53,30 @@ def _parse_leave_csv_rows(path: str) -> list[dict[str, str]]:
     return out
 
 
-def load_leave_dates_by_normalized_name(
-    path: str,
+def _parse_leave_csv_rows(path: str) -> list[dict[str, str]]:
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        grid = list(csv.reader(f))
+    return _dict_rows_from_csv_grid(grid)
+
+
+def parse_leave_csv_string(content: str) -> list[dict[str, str]]:
+    """Parse leave CSV from file text (UTF-8 with optional BOM)."""
+    text = (content or "").lstrip("\ufeff")
+    grid = list(csv.reader(io.StringIO(text)))
+    return _dict_rows_from_csv_grid(grid)
+
+
+def leave_dict_rows_to_dates_by_name(
+    rows: list[dict[str, str]],
     range_start_s: str,
     range_end_s: str,
 ) -> dict[str, set[str]]:
-    """
-    Returns map: normalized employee name -> set of YYYY-MM-DD strings that are
-    on approved leave, intersected with [range_start_s, range_end_s].
-
-    Only rows with Status containing 'approved' (case-insensitive) are used.
-    """
-    if not path or not os.path.isfile(path):
-        return {}
-
     try:
         audit_start = datetime.strptime(range_start_s, "%Y-%m-%d")
         audit_end = datetime.strptime(range_end_s, "%Y-%m-%d")
     except ValueError:
         return {}
 
-    rows = _parse_leave_csv_rows(path)
     by_name: dict[str, set[str]] = {}
 
     for row in rows:
@@ -108,6 +108,28 @@ def load_leave_dates_by_normalized_name(
     return by_name
 
 
+def load_leave_dates_by_normalized_name(
+    path: str,
+    range_start_s: str,
+    range_end_s: str,
+) -> dict[str, set[str]]:
+    if not path or not os.path.isfile(path):
+        return {}
+    rows = _parse_leave_csv_rows(path)
+    return leave_dict_rows_to_dates_by_name(rows, range_start_s, range_end_s)
+
+
+def load_leave_dates_from_csv_content(
+    content: str,
+    range_start_s: str,
+    range_end_s: str,
+) -> dict[str, set[str]]:
+    if not (content or "").strip():
+        return {}
+    rows = parse_leave_csv_string(content)
+    return leave_dict_rows_to_dates_by_name(rows, range_start_s, range_end_s)
+
+
 def build_leave_frozen_by_user_id(
     csv_path: str,
     name_by_id: dict[str, str],
@@ -116,9 +138,38 @@ def build_leave_frozen_by_user_id(
 ) -> dict[str, frozenset[str]]:
     """Maps each Clockify user id to frozenset of YYYY-MM-DD on approved leave in range."""
     name_to_dates = load_leave_dates_by_normalized_name(csv_path, start_date, end_date)
+    return _dates_map_to_uid_frozen(name_to_dates, name_by_id)
+
+
+def build_leave_frozen_by_user_id_from_content(
+    csv_text: str,
+    name_by_id: dict[str, str],
+    start_date: str,
+    end_date: str,
+) -> dict[str, frozenset[str]]:
+    """Same as build_leave_frozen_by_user_id but CSV body as string (e.g. uploaded file)."""
+    name_to_dates = load_leave_dates_from_csv_content(csv_text, start_date, end_date)
+    return _dates_map_to_uid_frozen(name_to_dates, name_by_id)
+
+
+def build_leave_frozen_by_user_id_from_bytes(
+    raw: bytes,
+    name_by_id: dict[str, str],
+    start_date: str,
+    end_date: str,
+) -> dict[str, frozenset[str]]:
+    text = raw.decode("utf-8-sig", errors="replace")
+    return build_leave_frozen_by_user_id_from_content(
+        text, name_by_id, start_date, end_date
+    )
+
+
+def _dates_map_to_uid_frozen(
+    name_to_dates: dict[str, set[str]],
+    name_by_id: dict[str, str],
+) -> dict[str, frozenset[str]]:
     if not name_to_dates:
         return {}
-
     out: dict[str, frozenset[str]] = {}
     for uid, raw_name in name_by_id.items():
         nk = _name_match_key(raw_name)
