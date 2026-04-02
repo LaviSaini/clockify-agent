@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import openpyxl
 from openpyxl.cell import WriteOnlyCell
@@ -53,19 +53,39 @@ def _row_uid(row: dict) -> str:
     return ((row.get("user_id") or row.get("user") or "") or "").strip()
 
 
-def _hours_deficit_from_row(data: dict, row: dict) -> float:
-    """Hours short of min_hours_per_day for that weekday (see MIN_HOURS_PER_DAY in analysis)."""
-    if row.get("hours_deficit") is not None:
-        try:
-            return float(row["hours_deficit"])
-        except (TypeError, ValueError):
-            pass
+def _weekday_count_in_range(start_date: str, end_date: str) -> int:
+    """Mon–Fri days inclusive between start and end (same basis as detect_missing_logs)."""
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    n = 0
+    current = start
+    while current <= end:
+        if current.weekday() < 5:
+            n += 1
+        current += timedelta(days=1)
+    return n
+
+
+def _deficit_exceeded_hours_for_day(data: dict, row: dict) -> float:
+    """Signed vs daily target: logged − MIN_HOURS (negative = deficit, positive = exceeded)."""
     try:
         target = float(data.get("min_hours_per_day") or 8)
         logged = float(row.get("hours_logged") or 0)
-        return round(max(0.0, target - logged), 2)
+        return round(logged - target, 2)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _total_deficit_exceeded_hours(
+    data: dict, uid: str, start_date: str, end_date: str
+) -> float:
+    """
+    Period total: actual hours − (MIN_HOURS × weekday count), e.g. 37 − 40 = −3, 45 − 40 = +5.
+    """
+    min_h = float(data.get("min_hours_per_day") or 8)
+    expected = min_h * _weekday_count_in_range(start_date, end_date)
+    actual = _total_hours_for_id(data, uid)
+    return round(actual - expected, 2)
 
 
 def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
@@ -81,18 +101,16 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
             "Total Hours",
             "Missing Days",
             "Incomplete Days",
-            "Total deficit (hrs)",
+            "Total Deficit / Exceeded Hours",
             "Flagged Entries",
         ],
     )
 
     missing_count = defaultdict(lambda: {"Missing": 0, "Incomplete": 0})
-    deficit_total_by_uid: defaultdict[str, float] = defaultdict(float)
     for row in data.get("missing_logs", []):
         rid = _row_uid(row)
         if rid:
             missing_count[rid][row["severity"]] += 1
-            deficit_total_by_uid[rid] += _hours_deficit_from_row(data, row)
 
     desc_count = defaultdict(int)
     for row in data.get("poor_descriptions", []):
@@ -113,7 +131,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
                 _total_hours_for_id(data, uid),
                 missing_count[uid]["Missing"],
                 missing_count[uid]["Incomplete"],
-                round(deficit_total_by_uid[uid], 2),
+                _total_deficit_exceeded_hours(data, uid, start_date, end_date),
                 desc_count[uid],
             ]
         )
@@ -122,7 +140,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
     ws2 = wb.create_sheet("Missing Logs")
     _append_header_row(
         ws2,
-        ["User", "Email", "Date", "Day", "Hours Logged", "Hours deficit", "Severity"],
+        ["User", "Email", "Date", "Day", "Hours Logged", "Deficit / Exceeded Hours", "Severity"],
     )
 
     for row in data.get("missing_logs", []):
@@ -130,7 +148,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
         uid = (row.get("user_id") or "").strip()
         name_cell = _name_for_id(data, uid) if uid else (row.get("user") or "").strip()
         email_cell = _email_for_id(data, uid) if uid else ""
-        deficit = _hours_deficit_from_row(data, row)
+        deficit = _deficit_exceeded_hours_for_day(data, row)
         _append_filled_row(
             ws2,
             [

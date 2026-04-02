@@ -26,7 +26,7 @@ def _allowed_activity_terms() -> frozenset[str]:
     """
     raw = os.getenv(
         "LOGLLENS_ALLOWED_ACTIVITY_TERMS",
-        "standup,assignment,meeting,scrum call",
+        "standup,assignment,meeting,stand-up,Scrum call",
     )
     return frozenset(p.strip().lower() for p in raw.split(",") if p.strip())
 
