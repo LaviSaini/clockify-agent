@@ -7,6 +7,13 @@ export type AnalyzeRequest = {
   leaveFile: File | null
 }
 
+export type AnalyzeSuccessBody = {
+  excel_filename?: string
+  excel_path?: string
+  counts?: Record<string, number | Record<string, number>>
+  [key: string]: unknown
+}
+
 export type AnalyzeResponse =
   | { ok: true; status: number; bodyText: string }
   | { ok: false; status: number; bodyText: string }
@@ -38,4 +45,29 @@ export async function postAnalyze(params: AnalyzeRequest): Promise<AnalyzeRespon
     const message = e instanceof Error ? e.message : 'Request failed'
     return { ok: false, error: message }
   }
+}
+
+/**
+ * GET generated workbook (must match server filename pattern).
+ */
+export async function downloadExcelFile(filename: string): Promise<Blob> {
+  const res = await fetch(
+    `${API_BASE}/download/excel/${encodeURIComponent(filename)}`,
+  )
+  if (!res.ok) {
+    const t = await res.text().catch(() => '')
+    throw new Error(t || `Download failed (${res.status})`)
+  }
+  return res.blob()
+}
+
+export function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }

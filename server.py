@@ -9,12 +9,14 @@ POST /analyze uses multipart form: optional leave CSV file upload (field name: l
 from __future__ import annotations
 
 import os
+import re
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 load_dotenv()
 
@@ -36,6 +38,9 @@ app.add_middleware(
 )
 
 
+_EXCEL_NAME = re.compile(r"^loglens_report_\d{4}-\d{2}-\d{2}\.xlsx$")
+
+
 def _parse_write_markdown(raw: str | None, write_excel: bool) -> bool:
     if raw is None or str(raw).strip() == "":
         return not write_excel
@@ -45,6 +50,28 @@ def _parse_write_markdown(raw: str | None, write_excel: bool) -> bool:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/download/excel/{filename}")
+def download_excel(filename: str):
+    """Serve a generated report from output/ (browser download)."""
+    if not _EXCEL_NAME.match(filename):
+        raise HTTPException(status_code=400, detail="Invalid report filename.")
+    base = Path("output").resolve()
+    path = (base / filename).resolve()
+    try:
+        path.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path.") from None
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Report not found.")
+    return FileResponse(
+        path,
+        filename=filename,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    )
 
 
 @app.post("/analyze")
@@ -120,6 +147,7 @@ async def analyze(
         out["min_hours_per_day"] = mhpd
     if excel_path:
         out["excel_path"] = excel_path
+        out["excel_filename"] = os.path.basename(excel_path)
     if markdown_path:
         out["markdown_path"] = markdown_path
     return JSONResponse(content=out)

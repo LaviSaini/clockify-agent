@@ -12,12 +12,17 @@ import {
   Upload,
 } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
-import { postAnalyze } from '../api/analyze'
+import {
+  downloadExcelFile,
+  postAnalyze,
+  triggerBlobDownload,
+} from '../api/analyze'
 import {
   DATE_FMT,
   rangeForPreset,
   type RangePreset,
 } from '../lib/dateRange'
+import type { Dayjs } from 'dayjs'
 
 const { Header, Content } = Layout
 const { Title } = Typography
@@ -44,7 +49,19 @@ export function AnalyzePage() {
       return
     }
 
-    const [start, end] = rangeForPreset(values.rangePreset)
+    let start: Dayjs
+    let end: Dayjs
+    if (values.rangePreset === 'custom') {
+      if (!customRange?.[0] || !customRange?.[1]) {
+        message.error('Please select a custom date range.')
+        return
+      }
+      start = customRange[0]
+      end = customRange[1]
+    } else {
+      ;[start, end] = rangeForPreset(values.rangePreset)
+    }
+
     const startStr = start.format(DATE_FMT)
     const endStr = end.format(DATE_FMT)
 
@@ -53,36 +70,62 @@ export function AnalyzePage() {
       return
     }
 
-    setSubmitting(true)
     setLastResponse(null)
+    setSubmitting(true)
+    const stopLoading = message.loading(
+      'Running audit and building Excel… this can take a few minutes.',
+      0,
+    )
 
-    const result = await postAnalyze({
-      startDate: startStr,
-      endDate: endStr,
-      writeExcel: true,
-      leaveFile,
-    })
+    try {
+      const result = await postAnalyze({
+        startDate: startStr,
+        endDate: endStr,
+        writeExcel: true,
+        leaveFile,
+      })
 
-    setSubmitting(false)
-
-    if (!result.ok) {
-      if ('error' in result) {
-        message.error(result.error)
+      if (!result.ok) {
+        if ('error' in result) {
+          message.error(result.error)
+          return
+        }
+        message.error(`Request failed (${result.status})`)
+        setLastResponse(result.bodyText)
         return
       }
-      message.error(`Request failed (${result.status})`)
-      setLastResponse(result.bodyText)
-      return
-    }
 
-    message.success('Analysis completed')
-    try {
-      const json = JSON.parse(result.bodyText) as unknown
-      setLastResponse(JSON.stringify(json, null, 2))
-    } catch {
-      setLastResponse(result.bodyText)
+      let excelFilename: string | undefined
+      try {
+        const parsed = JSON.parse(result.bodyText) as {
+          excel_filename?: string
+        }
+        excelFilename = parsed.excel_filename
+        setLastResponse(JSON.stringify(parsed, null, 2))
+      } catch {
+        setLastResponse(result.bodyText)
+      }
+
+      if (excelFilename) {
+        try {
+          message.info('Downloading Excel…', 2)
+          const blob = await downloadExcelFile(excelFilename)
+          triggerBlobDownload(blob, excelFilename)
+          message.success('Excel downloaded.')
+        } catch (e) {
+          const err = e instanceof Error ? e.message : 'Download failed'
+          message.warning(
+            `Analysis finished but download failed: ${err}. Use the JSON below for excel_filename.`,
+          )
+        }
+      } else {
+        message.success('Analysis completed (no Excel file in response).')
+      }
+    } finally {
+      stopLoading()
+      setSubmitting(false)
     }
-  }, [form, leaveFile, message])
+  }, [customRange, form, leaveFile, message])
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
