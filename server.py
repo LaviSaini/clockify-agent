@@ -26,6 +26,13 @@ app = FastAPI(title="LogLens API", version="0.1.0")
 class AnalyzeBody(BaseModel):
     start_date: str = Field(..., description="YYYY-MM-DD")
     end_date: str = Field(..., description="YYYY-MM-DD")
+    leave_csv_path: str | None = Field(
+        None,
+        description=(
+            "Optional absolute path to approved-leave CSV for this run. "
+            "If omitted, uses env LOGLLENS_LEAVE_CSV_PATH if set."
+        ),
+    )
     write_excel: bool = Field(False, description="If true, also write output/loglens_report_*.xlsx")
     write_markdown: bool | None = Field(
         None,
@@ -48,7 +55,11 @@ def health() -> dict[str, str]:
 @app.post("/analyze")
 def analyze(body: AnalyzeBody) -> JSONResponse:
     try:
-        data: dict[str, Any] = run_analysis(body.start_date, body.end_date)
+        data: dict[str, Any] = run_analysis(
+            body.start_date,
+            body.end_date,
+            leave_csv_path=body.leave_csv_path,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 

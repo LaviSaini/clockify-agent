@@ -10,9 +10,13 @@ def main():
     print("=== LogLens Time Audit Agent ===")
     start_date = input("Enter start date (YYYY-MM-DD): ").strip()
     end_date = input("Enter end date   (YYYY-MM-DD): ").strip()
+    leave_csv = input(
+        "Leave CSV path (optional, Enter to use .env LOGLLENS_LEAVE_CSV_PATH): "
+    ).strip()
+    leave_kw = {"leave_csv_path": leave_csv} if leave_csv else {}
 
     print(f"\nRunning analysis for {start_date} to {end_date}...")
-    report_data = run_analysis(start_date, end_date)
+    report_data = run_analysis(start_date, end_date, **leave_kw)
 
     print(f"Missing log entries found : {len(report_data.get('missing_logs', []))}")
     print(f"Poor descriptions found   : {len(report_data.get('poor_descriptions', []))}")

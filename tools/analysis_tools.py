@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from datetime import datetime, timedelta
 
@@ -10,10 +12,12 @@ def detect_missing_logs(
     entries: list,
     start_date: str,
     end_date: str,
+    leave_dates: frozenset[str] | None = None,
 ) -> list:
     """
     Given a list of time entries for a user, detects missing or incomplete days.
-    Skips weekends. Returns a list of flagged days with severity:
+    Skips weekends. Optionally skips weekdays in leave_dates (YYYY-MM-DD, approved leave).
+    Returns a list of flagged days with severity:
       - 'Missing'    → 0 hours logged
       - 'Incomplete' → logged but under MIN_HOURS_PER_DAY
     """
@@ -32,6 +36,11 @@ def detect_missing_logs(
         if current.weekday() < 5:  # Monday–Friday only
             date_str = current.strftime("%Y-%m-%d")
             day_name = current.strftime("%A")
+
+            if leave_dates and date_str in leave_dates:
+                current += timedelta(days=1)
+                continue
+
             hours = hours_by_date.get(date_str, 0)
 
             if hours == 0:

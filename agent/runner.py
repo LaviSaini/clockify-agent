@@ -14,6 +14,7 @@ from openai import OpenAI
 from agent.prompts import OPEN_AI_SYSTEM_PROMPT
 from tools.analysis_tools import MIN_HOURS, detect_missing_logs
 from tools.clockify_tools import get_all_users, get_projects, get_time_entries
+from tools.leave_loader import build_leave_frozen_by_user_id
 
 
 def _allowed_activity_terms() -> frozenset[str]:
@@ -25,7 +26,7 @@ def _allowed_activity_terms() -> frozenset[str]:
     """
     raw = os.getenv(
         "LOGLLENS_ALLOWED_ACTIVITY_TERMS",
-        "standup,assignment,meeting","Scrum call"
+        "standup,assignment,meeting,scrum call",
     )
     return frozenset(p.strip().lower() for p in raw.split(",") if p.strip())
 
@@ -117,6 +118,7 @@ def _fetch_and_detect_for_user(
     start_date: str,
     end_date: str,
     project_by_id: dict,
+    leave_by_uid: dict[str, frozenset[str]],
 ) -> tuple[int, str | None, list, list]:
     uid_str = _user_id_str(u)
     raw_name = (u.get("name") or "").strip()
@@ -136,7 +138,15 @@ def _fetch_and_detect_for_user(
         return index, uid_str, [], []
 
     try:
-        missing = detect_missing_logs(raw_name, uid_str, entries, start_date, end_date)
+        leave_dates = leave_by_uid.get(uid_str) or frozenset()
+        missing = detect_missing_logs(
+            raw_name,
+            uid_str,
+            entries,
+            start_date,
+            end_date,
+            leave_dates=leave_dates,
+        )
     except Exception as e:
         print(f"Error detecting missing logs for user {uid_str}: {e}")
         traceback.print_exc()
@@ -145,7 +155,11 @@ def _fetch_and_detect_for_user(
     return index, uid_str, entries, missing
 
 
-def gather_payload(start_date: str, end_date: str) -> dict:
+def gather_payload(
+    start_date: str,
+    end_date: str,
+    leave_csv_path: str | None = None,
+) -> dict:
     try:
         users = get_all_users()
     except Exception as e:
@@ -164,6 +178,15 @@ def gather_payload(start_date: str, end_date: str) -> dict:
     missing_logs: list = []
     name_by_id, email_by_id, workspace_user_ids = _roster_maps(users)
 
+    leave_csv = (leave_csv_path or "").strip() or os.getenv(
+        "LOGLLENS_LEAVE_CSV_PATH", ""
+    ).strip()
+    leave_by_uid = (
+        build_leave_frozen_by_user_id(leave_csv, name_by_id, start_date, end_date)
+        if leave_csv
+        else {}
+    )
+
     # Default 1: Clockify rate-limits hard; raise CLOCKIFY_FETCH_CONCURRENCY only if your plan allows.
     conc = int(os.getenv("CLOCKIFY_FETCH_CONCURRENCY", "1"))
     conc = max(1, min(conc, 16))
@@ -178,6 +201,7 @@ def gather_payload(start_date: str, end_date: str) -> dict:
                 start_date,
                 end_date,
                 project_by_id,
+                leave_by_uid,
             )
             for i, u in enumerate(users)
         ]
@@ -385,9 +409,13 @@ def _normalize_poor_description_rows(rows: list[dict], name_by_id: dict[str, str
             row["user"] = name_by_id.get(ufield, "")
 
 
-def run_analysis(start_date: str, end_date: str) -> dict:
+def run_analysis(
+    start_date: str,
+    end_date: str,
+    leave_csv_path: str | None = None,
+) -> dict:
     model_name = _openai_model_name()
-    payload = gather_payload(start_date, end_date)
+    payload = gather_payload(start_date, end_date, leave_csv_path=leave_csv_path)
 
     # 1) Local pre-scan first.
     #    - local_poor_descriptions: score in {1,2}
