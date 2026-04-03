@@ -185,7 +185,11 @@ def gather_payload(
     leave_by_uid: dict[str, frozenset[str]] = {}
     if (leave_csv_text or "").strip():
         leave_by_uid = build_leave_frozen_by_user_id_from_content(
-            leave_csv_text, name_by_id, start_date, end_date
+            leave_csv_text,
+            name_by_id,
+            start_date,
+            end_date,
+            email_by_id=email_by_id,
         )
     else:
         leave_csv = (leave_csv_path or "").strip() or os.getenv(
@@ -193,7 +197,11 @@ def gather_payload(
         ).strip()
         if leave_csv:
             leave_by_uid = build_leave_frozen_by_user_id(
-                leave_csv, name_by_id, start_date, end_date
+                leave_csv,
+                name_by_id,
+                start_date,
+                end_date,
+                email_by_id=email_by_id,
             )
 
     # Default 1: Clockify rate-limits hard; raise CLOCKIFY_FETCH_CONCURRENCY only if your plan allows.
@@ -227,6 +235,14 @@ def gather_payload(
 
     total_hours_by_user_id = _total_hours_by_user(time_entries_by_user)
 
+    leave_days_by_user_id = {
+        str(uid).strip(): len(dates) for uid, dates in leave_by_uid.items()
+    }
+    # Explicit date lists so Excel / consumers can count even if int map is missing keys.
+    leave_dates_by_user_id = {
+        str(uid).strip(): sorted(list(dates)) for uid, dates in leave_by_uid.items()
+    }
+
     return {
         "users": users,
         "projects": projects,
@@ -237,6 +253,8 @@ def gather_payload(
         "workspace_user_ids": workspace_user_ids,
         "total_hours_by_user_id": total_hours_by_user_id,
         "min_hours_per_day": MIN_HOURS,
+        "leave_days_by_user_id": leave_days_by_user_id,
+        "leave_dates_by_user_id": leave_dates_by_user_id,
     }
 
 
@@ -452,6 +470,8 @@ def run_analysis(
             "workspace_user_ids": payload.get("workspace_user_ids") or [],
             "total_hours_by_user_id": payload.get("total_hours_by_user_id") or {},
             "min_hours_per_day": payload.get("min_hours_per_day", MIN_HOURS),
+            "leave_days_by_user_id": payload.get("leave_days_by_user_id") or {},
+            "leave_dates_by_user_id": payload.get("leave_dates_by_user_id") or {},
         }
 
     # 3) Minimal LLM payload: only borderline entries, compact JSON, no missing_logs/users/projects.
@@ -505,6 +525,8 @@ def run_analysis(
             "workspace_user_ids": payload.get("workspace_user_ids") or [],
             "total_hours_by_user_id": payload.get("total_hours_by_user_id") or {},
             "min_hours_per_day": payload.get("min_hours_per_day", MIN_HOURS),
+            "leave_days_by_user_id": payload.get("leave_days_by_user_id") or {},
+            "leave_dates_by_user_id": payload.get("leave_dates_by_user_id") or {},
         }
     except Exception as exc:
         print(f"[runner] OpenAI analysis failed, using local scores only: {exc}")
@@ -518,4 +540,6 @@ def run_analysis(
             "workspace_user_ids": payload.get("workspace_user_ids") or [],
             "total_hours_by_user_id": payload.get("total_hours_by_user_id") or {},
             "min_hours_per_day": payload.get("min_hours_per_day", MIN_HOURS),
+            "leave_days_by_user_id": payload.get("leave_days_by_user_id") or {},
+            "leave_dates_by_user_id": payload.get("leave_dates_by_user_id") or {},
         }

@@ -31,6 +31,12 @@ def _append_filled_row(ws, values: list, fill: PatternFill) -> None:
     ws.append(row)
 
 
+def _append_write_row(ws, values: list) -> None:
+    """Write-only sheets: append a full row using WriteOnlyCell (matches header pattern)."""
+    row = [WriteOnlyCell(ws, v) for v in values]
+    ws.append(row)
+
+
 def _name_for_id(data: dict, uid: str) -> str:
     return ((data.get("user_name_by_id") or {}).get(uid, "") or "").strip()
 
@@ -47,6 +53,23 @@ def _total_hours_for_id(data: dict, uid: str) -> float:
         return float(raw)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _leave_days_for_id(data: dict, uid: str) -> int:
+    """Count of calendar days on approved leave overlapping the report range (from HR CSV)."""
+    sk = str(uid).strip()
+    days_map = data.get("leave_days_by_user_id") or {}
+    raw = days_map.get(sk)
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    dates_map = data.get("leave_dates_by_user_id") or {}
+    dates = dates_map.get(sk)
+    if dates is not None:
+        return len(dates)
+    return 0
 
 
 def _row_uid(row: dict) -> str:
@@ -99,6 +122,7 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
             "User",
             "Email",
             "Total Hours",
+            "Leave days",
             "Missing Days",
             "Incomplete Days",
             "Total Deficit / Exceeded Hours",
@@ -124,16 +148,18 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
         users_for_summary = sorted(issue_ids, key=lambda x: x or "")
 
     for uid in users_for_summary:
-        ws1.append(
+        _append_write_row(
+            ws1,
             [
                 _name_for_id(data, uid),
                 _email_for_id(data, uid),
                 _total_hours_for_id(data, uid),
+                _leave_days_for_id(data, uid),
                 missing_count[uid]["Missing"],
                 missing_count[uid]["Incomplete"],
                 _total_deficit_exceeded_hours(data, uid, start_date, end_date),
                 desc_count[uid],
-            ]
+            ],
         )
 
     # ── Sheet 2: Missing Logs ─────────────────────────────────────────────────

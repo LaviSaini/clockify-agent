@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import re
 from datetime import datetime, timedelta
 
 
@@ -19,6 +20,49 @@ def _name_match_key(name: str) -> str:
     """Stable key so CSV vs Clockify order differs (e.g. 'Pyla Abhilash' vs 'Abhilash Pyla')."""
     toks = sorted(_normalize_person_name(name).split())
     return " ".join(toks)
+
+
+def _leave_status_is_approved(status: str) -> bool:
+    """
+    True for approved leave rows. Tolerates typos (e.g. 'Approvved') via repeated-letter collapse.
+    Excludes rejected / not approved / cancelled.
+    """
+    s = (status or "").strip().lower()
+    if not s:
+        return False
+    if "not approved" in s:
+        return False
+    if any(x in s for x in ("rejected", "denied", "withdraw", "cancelled", "canceled")):
+        return False
+    if "approved" in s:
+        return True
+    # Typo-tolerant: e.g. "approvved" -> collapse runs -> "approved"
+    collapsed = re.sub(r"(.)\1+", r"\1", s)
+    return "approved" in collapsed
+
+
+def _row_employee_email(row: dict[str, str]) -> str:
+    """Lowercase email from common HR export column names."""
+    for col in (
+        "Email",
+        "Employee Email",
+        "Email Id",
+        "Email ID",
+        "Work Email",
+        "Company Email",
+    ):
+        v = (row.get(col) or "").strip().lower()
+        if v and "@" in v:
+            return v
+    return ""
+
+
+def _row_employee_name(row: dict[str, str]) -> str:
+    for col in ("Employee Name", "Employee", "Name", "Staff Name"):
+        v = (row.get(col) or "").strip()
+        if v:
+            return v
+    return ""
 
 
 def _parse_leave_date(s: str) -> datetime | None:
@@ -66,55 +110,74 @@ def parse_leave_csv_string(content: str) -> list[dict[str, str]]:
     return _dict_rows_from_csv_grid(grid)
 
 
-def leave_dict_rows_to_dates_by_name(
-    rows: list[dict[str, str]],
+def _dates_in_audit_window(
+    from_dt: datetime,
+    to_dt: datetime,
     range_start_s: str,
     range_end_s: str,
-) -> dict[str, set[str]]:
+) -> set[str]:
+    """Leave segment intersected with [range_start_s, range_end_s] as YYYY-MM-DD strings."""
     try:
         audit_start = datetime.strptime(range_start_s, "%Y-%m-%d")
         audit_end = datetime.strptime(range_end_s, "%Y-%m-%d")
     except ValueError:
-        return {}
+        return set()
+    if to_dt < from_dt:
+        from_dt, to_dt = to_dt, from_dt
+    out: set[str] = set()
+    cur = from_dt.date()
+    end_d = to_dt.date()
+    while cur <= end_d:
+        if audit_start.date() <= cur <= audit_end.date():
+            out.add(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
+    return out
 
+
+def leave_dict_rows_to_dates_by_name(
+    rows: list[dict[str, str]],
+    range_start_s: str,
+    range_end_s: str,
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """
+    Returns (dates_by_sorted_name_key, dates_by_lowercase_email).
+    Email map is used when Clockify display name does not match CSV Employee Name.
+    """
     by_name: dict[str, set[str]] = {}
+    by_email: dict[str, set[str]] = {}
 
     for row in rows:
-        status = (row.get("Status") or "").strip().lower()
-        if "approved" not in status:
+        if not _leave_status_is_approved(row.get("Status") or ""):
             continue
 
-        emp_name = (row.get("Employee Name") or "").strip()
-        if not emp_name:
-            continue
-
+        emp_name = _row_employee_name(row)
         from_dt = _parse_leave_date(row.get("From Date") or "")
         to_dt = _parse_leave_date(row.get("To Date") or "")
         if from_dt is None or to_dt is None:
             continue
-        if to_dt < from_dt:
-            from_dt, to_dt = to_dt, from_dt
 
-        key = _name_match_key(emp_name)
-        bucket = by_name.setdefault(key, set())
+        dates = _dates_in_audit_window(from_dt, to_dt, range_start_s, range_end_s)
+        if not dates:
+            continue
 
-        cur = from_dt.date()
-        end_d = to_dt.date()
-        while cur <= end_d:
-            if audit_start.date() <= cur <= audit_end.date():
-                bucket.add(cur.strftime("%Y-%m-%d"))
-            cur += timedelta(days=1)
+        if emp_name:
+            key = _name_match_key(emp_name)
+            by_name.setdefault(key, set()).update(dates)
 
-    return by_name
+        em = _row_employee_email(row)
+        if em:
+            by_email.setdefault(em, set()).update(dates)
+
+    return by_name, by_email
 
 
 def load_leave_dates_by_normalized_name(
     path: str,
     range_start_s: str,
     range_end_s: str,
-) -> dict[str, set[str]]:
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     if not path or not os.path.isfile(path):
-        return {}
+        return {}, {}
     rows = _parse_leave_csv_rows(path)
     return leave_dict_rows_to_dates_by_name(rows, range_start_s, range_end_s)
 
@@ -123,9 +186,9 @@ def load_leave_dates_from_csv_content(
     content: str,
     range_start_s: str,
     range_end_s: str,
-) -> dict[str, set[str]]:
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     if not (content or "").strip():
-        return {}
+        return {}, {}
     rows = parse_leave_csv_string(content)
     return leave_dict_rows_to_dates_by_name(rows, range_start_s, range_end_s)
 
@@ -135,10 +198,15 @@ def build_leave_frozen_by_user_id(
     name_by_id: dict[str, str],
     start_date: str,
     end_date: str,
+    email_by_id: dict[str, str] | None = None,
 ) -> dict[str, frozenset[str]]:
     """Maps each Clockify user id to frozenset of YYYY-MM-DD on approved leave in range."""
-    name_to_dates = load_leave_dates_by_normalized_name(csv_path, start_date, end_date)
-    return _dates_map_to_uid_frozen(name_to_dates, name_by_id)
+    name_to_dates, email_to_dates = load_leave_dates_by_normalized_name(
+        csv_path, start_date, end_date
+    )
+    return _dates_map_to_uid_frozen(
+        name_to_dates, name_by_id, email_by_id=email_by_id, email_to_dates=email_to_dates
+    )
 
 
 def build_leave_frozen_by_user_id_from_content(
@@ -146,10 +214,15 @@ def build_leave_frozen_by_user_id_from_content(
     name_by_id: dict[str, str],
     start_date: str,
     end_date: str,
+    email_by_id: dict[str, str] | None = None,
 ) -> dict[str, frozenset[str]]:
     """Same as build_leave_frozen_by_user_id but CSV body as string (e.g. uploaded file)."""
-    name_to_dates = load_leave_dates_from_csv_content(csv_text, start_date, end_date)
-    return _dates_map_to_uid_frozen(name_to_dates, name_by_id)
+    name_to_dates, email_to_dates = load_leave_dates_from_csv_content(
+        csv_text, start_date, end_date
+    )
+    return _dates_map_to_uid_frozen(
+        name_to_dates, name_by_id, email_by_id=email_by_id, email_to_dates=email_to_dates
+    )
 
 
 def build_leave_frozen_by_user_id_from_bytes(
@@ -157,22 +230,33 @@ def build_leave_frozen_by_user_id_from_bytes(
     name_by_id: dict[str, str],
     start_date: str,
     end_date: str,
+    email_by_id: dict[str, str] | None = None,
 ) -> dict[str, frozenset[str]]:
     text = raw.decode("utf-8-sig", errors="replace")
     return build_leave_frozen_by_user_id_from_content(
-        text, name_by_id, start_date, end_date
+        text, name_by_id, start_date, end_date, email_by_id=email_by_id
     )
 
 
 def _dates_map_to_uid_frozen(
     name_to_dates: dict[str, set[str]],
     name_by_id: dict[str, str],
+    *,
+    email_by_id: dict[str, str] | None = None,
+    email_to_dates: dict[str, set[str]] | None = None,
 ) -> dict[str, frozenset[str]]:
-    if not name_to_dates:
-        return {}
+    """
+    Map HR CSV rows to Clockify user ids using sorted-token name match, then merge
+    any dates matched by work email (same email as Clockify user).
+    """
+    email_by_id = email_by_id or {}
+    email_to_dates = email_to_dates or {}
     out: dict[str, frozenset[str]] = {}
     for uid, raw_name in name_by_id.items():
         nk = _name_match_key(raw_name)
-        dates = name_to_dates.get(nk) or set()
+        dates = set(name_to_dates.get(nk) or ())
+        em = (email_by_id.get(uid) or "").strip().lower()
+        if em and em in email_to_dates:
+            dates |= email_to_dates[em]
         out[uid] = frozenset(dates)
     return out

@@ -142,6 +142,12 @@ async def analyze(
     th = data.get("total_hours_by_user_id")
     if th is not None:
         out["total_hours_by_user_id"] = th
+    ld = data.get("leave_days_by_user_id")
+    if ld is not None:
+        out["leave_days_by_user_id"] = ld
+    ldates = data.get("leave_dates_by_user_id")
+    if ldates is not None:
+        out["leave_dates_by_user_id"] = ldates
     mhpd = data.get("min_hours_per_day")
     if mhpd is not None:
         out["min_hours_per_day"] = mhpd
