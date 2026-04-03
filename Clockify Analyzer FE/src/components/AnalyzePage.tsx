@@ -245,7 +245,7 @@ export function AnalyzePage() {
           </Card>
         </Form>
 
-        {lastResponse ? (
+        {/* {lastResponse ? (
           <Card
             style={{
               width: '100%',
@@ -260,7 +260,7 @@ export function AnalyzePage() {
             </Title>
             <pre className="response-block">{lastResponse}</pre>
           </Card>
-        ) : null}
+        ) : null} */}
       </Content>
     </Layout>
   )
