@@ -1,7 +1,9 @@
+import json
 import os
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 import requests
@@ -86,6 +88,40 @@ def _time_entries_array_from_body(data: Any) -> list:
     return []
 
 
+def _agent_config_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "config" / "agent_config.json"
+
+def _excluded_emails_from_agent_config() -> frozenset[str]:
+    """
+    Reads excluded_emails from config/agent_config.json (JSON array of strings).
+    Override path with LOGLLENS_AGENT_CONFIG_PATH.
+    """
+    path = _agent_config_path()
+    if not path.is_file():
+        return frozenset()
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _log(f"agent_config unreadable ({path}): {e}")
+        return frozenset()
+
+    if not isinstance(data, dict):
+        _log(f"agent_config must be a JSON object: {path}")
+        return frozenset()
+
+    emails = data.get("excluded_emails")
+    if emails is None:
+        return frozenset()
+    if not isinstance(emails, list):
+        _log(f"agent_config excluded_emails must be an array: {path}")
+        return frozenset()
+
+    return frozenset(
+        e.strip().lower() for e in emails if isinstance(e, str) and e.strip()
+    )
+
 def _workspace_id() -> str:
     wid = os.getenv("CLOCKIFY_WORKSPACE_ID", "").strip()
     if wid:
@@ -137,6 +173,21 @@ def get_all_users() -> list:
             break
 
         page += 1
+
+    excluded = _excluded_emails_from_agent_config()
+    if excluded:
+        before = len(final_users_data)
+        final_users_data = [
+            u
+            for u in final_users_data
+            if (u.get("email") or "").strip().lower() not in excluded
+        ]
+        dropped = before - len(final_users_data)
+        if dropped:
+            _log(
+                f"CLOCKIFY exclude emails (env + agent_config excluded_emails): skipped {dropped} user(s), "
+                f"{len(final_users_data)} remaining"
+            )
 
     print(len(final_users_data), "final users data")
     return final_users_data
