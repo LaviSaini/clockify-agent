@@ -116,7 +116,7 @@ def _dates_in_audit_window(
     range_start_s: str,
     range_end_s: str,
 ) -> set[str]:
-    """Leave segment intersected with [range_start_s, range_end_s] as YYYY-MM-DD strings."""
+    """Weekdays only from leave segment intersected with audit window."""
     try:
         audit_start = datetime.strptime(range_start_s, "%Y-%m-%d")
         audit_end = datetime.strptime(range_end_s, "%Y-%m-%d")
@@ -128,7 +128,8 @@ def _dates_in_audit_window(
     cur = from_dt.date()
     end_d = to_dt.date()
     while cur <= end_d:
-        if audit_start.date() <= cur <= audit_end.date():
+        # Count only Mon-Fri leave dates for missing-day adjustments.
+        if audit_start.date() <= cur <= audit_end.date() and cur.weekday() < 5:
             out.add(cur.strftime("%Y-%m-%d"))
         cur += timedelta(days=1)
     return out
