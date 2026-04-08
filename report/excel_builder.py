@@ -111,6 +111,38 @@ def _total_deficit_exceeded_hours(
     return round(actual - expected, 2)
 
 
+def _project_hours_rows_sorted_by_email(data: dict) -> list[tuple[str, str, str, float]]:
+    """
+    Aggregate hours by (user, project) and sort by email, then project.
+    Returns tuples: (user_name, email, project, hours).
+    """
+    by_user_project: dict[tuple[str, str], float] = defaultdict(float)
+    entries_by_user = data.get("time_entries_by_user") or {}
+    for uid, entries in entries_by_user.items():
+        uid_s = str(uid).strip()
+        for entry in entries:
+            project = (entry.get("project") or "").strip() or "Unassigned"
+            try:
+                hours = float(entry.get("hours") or 0)
+            except (TypeError, ValueError):
+                hours = 0.0
+            by_user_project[(uid_s, project)] += hours
+
+    rows: list[tuple[str, str, str, float]] = []
+    for (uid, project), total in by_user_project.items():
+        rows.append(
+            (
+                _name_for_id(data, uid),
+                _email_for_id(data, uid),
+                project,
+                round(total, 2),
+            )
+        )
+
+    rows.sort(key=lambda r: ((r[1] or "").strip().lower(), (r[2] or "").strip().lower()))
+    return rows
+
+
 def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
     wb = openpyxl.Workbook(write_only=True)
 
@@ -213,6 +245,12 @@ def build_excel_report(data: dict, start_date: str, end_date: str) -> str:
             ],
             fill,
         )
+
+    # ── Sheet 4: Project Hours by Employee ────────────────────────────────────
+    ws4 = wb.create_sheet("Project Hours by Employee")
+    _append_header_row(ws4, ["User", "Email", "Project", "Hours"])
+    for user, email, project, hours in _project_hours_rows_sorted_by_email(data):
+        _append_write_row(ws4, [user, email, project, hours])
 
     # ── Save ──────────────────────────────────────────────────────────────────
     os.makedirs("output", exist_ok=True)

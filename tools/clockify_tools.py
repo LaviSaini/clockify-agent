@@ -257,16 +257,41 @@ def get_time_entries(user_id: str, start_date: str, end_date: str) -> list:
     return entries
 
 
+def fetch_all_projects(page: int = 1, page_size: int = 50):
+    workspace_id = _workspace_id()
+    url = f"{BASE_URL}/workspaces/{workspace_id}/projects"
+    return _request_get_with_retry(
+        url,
+        params={"page": page, "page-size": page_size},
+    )
+
+
 def get_projects() -> list:
-    """Returns all projects in the workspace."""
-    url = f"{BASE_URL}/workspaces/{_workspace_id()}/projects"
-    data = _get_json_with_retry(url)
-    if isinstance(data, list):
-        projects = data
-    elif isinstance(data, dict) and isinstance(data.get("projects"), list):
-        projects = data["projects"]
-    else:
-        projects = []
+    """Returns all projects in the workspace (paginated)."""
+    projects: list = []
+    page = 1
+    page_size = 50
+    max_pages = int(os.getenv("CLOCKIFY_PROJECTS_MAX_PAGES", "500"))
+
+    while page <= max_pages:
+        response = fetch_all_projects(page, page_size)
+        data = response.json()
+        if isinstance(data, list):
+            chunk = data
+        elif isinstance(data, dict) and isinstance(data.get("projects"), list):
+            chunk = data["projects"]
+        else:
+            chunk = []
+
+        projects.extend(chunk)
+
+        last_page = response.headers.get("Last-Page", "false")
+        if last_page == "true":
+            break
+        if len(chunk) < page_size:
+            break
+        page += 1
+
     out = []
     for p in projects:
         if not isinstance(p, dict):
